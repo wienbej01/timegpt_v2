@@ -1,0 +1,75 @@
+# codex.config.yaml
+project_name: timegpt_v2
+language: python
+python:
+  version: "3.10"
+  venv: .venv
+  install:
+    - python -m venv .venv
+    - . .venv/bin/activate && pip install -U pip wheel setuptools
+    - . .venv/bin/activate && pip install -e .[dev]
+lint:
+  - . .venv/bin/activate && ruff check .
+  - . .venv/bin/activate && black --check .
+  - . .venv/bin/activate && isort --check-only .
+  - . .venv/bin/activate && mypy src/timegpt_v2
+test:
+  - . .venv/bin/activate && pytest -q
+  - . .venv/bin/activate && pytest --cov=src/timegpt_v2 --cov-report=term-missing
+build_commands:
+  - . .venv/bin/activate && python -m timegpt_v2.cli --help || true
+  - . .venv/bin/activate && make run || true
+repo:
+  default_branch: main
+  commit_message_template: "[{persona}] {summary}"
+  personas:
+    - "Head of Quant Trading System Development"
+    - "Chief Data Scientist"
+git:
+  auto_commit: true
+  auto_push: true
+  add_all: true
+  remote: origin
+  branch_strategy: current
+workspace:
+  root: .
+  allowed_write_paths:
+    - configs/**
+    - docs/**
+    - src/timegpt_v2/**
+    - tests/**
+    - artifacts/**    # should be gitignored; used at runtime
+    - .gitignore
+    - .editorconfig
+    - .pre-commit-config.yaml
+    - Makefile
+    - pyproject.toml
+    - README.md
+    - SPRINTS.md
+runtime:
+  env:
+    TZ: "America/New_York"
+  hooks:
+    post_install:
+      - . .venv/bin/activate && pre-commit install || true
+    pre_commit:
+      - . .venv/bin/activate && make fmt && make lint
+    pre_push:
+      - . .venv/bin/activate && make test
+artifacts:
+  run_dir: artifacts/runs
+  meta_file: meta.json
+guardrails:
+  forbid_inplace_mutation_across_runs: true
+  enforce_types: true
+  fail_on_missing_tests: true
+  fail_on_lint_errors: true
+acceptance_checks:
+  - file_exists: SPRINTS.md
+  - command: . .venv/bin/activate && make install
+  - command: . .venv/bin/activate && make lint
+  - command: . .venv/bin/activate && make test
+  - command: . .venv/bin/activate && python -m timegpt_v2.cli --help
+notes:
+  - "All implementation details, tasks, and test requirements are defined in SPRINTS.md."
+  - "Do not modify artifacts/ outputs under version control; artifacts/ should remain gitignored."

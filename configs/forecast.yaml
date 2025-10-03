@@ -1,0 +1,10 @@
+snapshots_et: ["10:00", "14:30"]
+horizon_min: 15
+freq: "min"
+quantiles: [0.25, 0.5, 0.75]
+batch_multi_series: true
+retry:
+  max: 3
+  backoff_sec: 2
+cache: true
+tz: America/New_York

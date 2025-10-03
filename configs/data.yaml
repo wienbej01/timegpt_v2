@@ -1,0 +1,4 @@
+# Sprint 0 placeholder; configured in later sprints.
+gcs:
+  bucket: ""
+  template: ""

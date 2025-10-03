@@ -1,0 +1,8 @@
+tickers: [AAPL, MSFT, NVDA]
+dates:
+  start: "2024-07-01"
+  end: "2024-08-31"
+tz: America/New_York
+rth:
+  open: "09:30"
+  close: "16:00"

@@ -1,0 +1,4 @@
+# Sprint 0 placeholder; policy defined in Sprint 1.
+rth_min_pct: 0.0
+drop_days_with_sustained_ffill: false
+hard_fail_on_schema: false
