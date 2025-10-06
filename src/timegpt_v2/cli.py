@@ -6,9 +6,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import typer
 import yaml
 
+from timegpt_v2.fe.base_features import build_feature_matrix
+from timegpt_v2.fe.context import FeatureContext
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
 from timegpt_v2.quality.checks import DataQualityChecker
 from timegpt_v2.quality.contracts import DataQualityPolicy
@@ -142,7 +145,43 @@ def build_features(
     run_id: str = RUN_ID_OPTION,
 ) -> None:
     """Build feature matrix from validated data."""
-    typer.echo(f"build-features stub: run_id={run_id}, config_dir={config_dir}")
+    run_dir = Path("artifacts") / "runs" / run_id
+    validation_dir = run_dir / "validation"
+    output_dir = run_dir / "features"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    clean_path = validation_dir / "clean.parquet"
+    if not clean_path.exists():
+        raise typer.BadParameter(
+            "Validated data not found. Run `check-data` before `build-features`."
+        )
+
+    data = pd.read_parquet(clean_path)
+    context = FeatureContext(symbols=data["symbol"].unique())
+    features = build_feature_matrix(data, context=context)
+
+    feature_path = output_dir / "features.parquet"
+    features.to_parquet(feature_path, index=False)
+
+    meta_path = run_dir / "meta.json"
+    meta = {
+        "command": "build-features",
+        "run_id": run_id,
+        "rows": len(features),
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "input_path": str(clean_path),
+        "output_path": str(feature_path),
+    }
+    if meta_path.exists():
+        existing = json.loads(meta_path.read_text(encoding="utf-8"))
+    else:
+        existing = {}
+    existing.setdefault("steps", {})
+    existing["command"] = "build-features"
+    existing["steps"]["build-features"] = meta
+    meta_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+    typer.echo(f"Features written to {feature_path}")
 
 
 @app.command()
