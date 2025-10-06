@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, MutableMapping, Sequence
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import typer
@@ -12,9 +14,12 @@ import yaml
 
 from timegpt_v2.fe.base_features import build_feature_matrix
 from timegpt_v2.fe.context import FeatureContext
+from timegpt_v2.forecast.timegpt_client import TimeGPTClient, TimeGPTConfig
+from timegpt_v2.framing.build_payloads import build_x_df_for_horizon, build_y_df
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
 from timegpt_v2.quality.checks import DataQualityChecker
 from timegpt_v2.quality.contracts import DataQualityPolicy
+from timegpt_v2.utils.cache import ForecastCache
 
 app = typer.Typer(help="TimeGPT Intraday v2 command line interface")
 
@@ -59,6 +64,17 @@ def _json_default(obj: object) -> str:
     if hasattr(obj, "isoformat"):
         return obj.isoformat()  # type: ignore[return-value]
     return str(obj)
+
+
+def _configure_logger(log_path: Path) -> logging.Logger:
+    logger = logging.getLogger("timegpt_v2.forecast")
+    logger.setLevel(logging.INFO)
+    logger.handlers = []
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)sZ %(levelname)s %(message)s"))
+    logger.addHandler(handler)
+    logger.propagate = False
+    return logger
 
 
 @app.command(name="check-data")
@@ -190,7 +206,130 @@ def forecast(
     run_id: str = RUN_ID_OPTION,
 ) -> None:
     """Generate TimeGPT quantile forecasts."""
-    typer.echo(f"forecast stub: run_id={run_id}, config_dir={config_dir}")
+
+    run_dir = Path("artifacts") / "runs" / run_id
+    feature_path = run_dir / "features" / "features.parquet"
+    forecasts_dir = run_dir / "forecasts"
+    logs_dir = run_dir / "logs"
+    forecasts_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    if not feature_path.exists():
+        raise typer.BadParameter("Feature matrix not found. Run `build-features` first.")
+
+    features = pd.read_parquet(feature_path)
+    if "timestamp" not in features.columns or "symbol" not in features.columns:
+        raise typer.BadParameter("features.parquet must include 'timestamp' and 'symbol' columns")
+
+    forecast_cfg = _load_yaml(config_dir / "forecast.yaml")
+    quantiles = tuple(float(q) for q in forecast_cfg.get("quantiles", [0.25, 0.5, 0.75]))
+    horizon = int(forecast_cfg.get("horizon_min", 15))
+    freq = str(forecast_cfg.get("freq", "min"))
+    tz_name = str(forecast_cfg.get("tz", "America/New_York"))
+    snapshot_strs = forecast_cfg.get("snapshots_et", [])
+    if not snapshot_strs:
+        raise typer.BadParameter("forecast.yaml must define snapshots_et")
+
+    zone = ZoneInfo(tz_name)
+
+    features["timestamp"] = pd.to_datetime(features["timestamp"], utc=True)
+    features_et = features["timestamp"].dt.tz_convert(zone)
+    features = features.assign(timestamp_et=features_et)
+
+    snapshots: list[time] = []
+    for snapshot in snapshot_strs:
+        try:
+            parsed = datetime.strptime(str(snapshot), "%H:%M").time()
+        except ValueError as exc:  # pragma: no cover - config error
+            raise typer.BadParameter(f"Invalid snapshot time: {snapshot}") from exc
+        snapshots.append(parsed)
+
+    logger = _configure_logger(logs_dir / "forecast.log")
+    cache = ForecastCache(forecasts_dir / "cache", logger=logger)
+    client = TimeGPTClient(
+        cache=cache,
+        config=TimeGPTConfig(freq=freq, horizon=horizon, quantiles=quantiles),
+        logger=logger,
+    )
+
+    expected_symbols = sorted(str(sym) for sym in features["symbol"].unique())
+    if not expected_symbols:
+        raise typer.BadParameter("No symbols available for forecasting")
+
+    results: list[pd.DataFrame] = []
+
+    for trade_date in sorted(features["timestamp_et"].dt.date.unique()):
+        daily_mask = features["timestamp_et"].dt.date == trade_date
+        if not daily_mask.any():
+            continue
+        for snapshot_time in snapshots:
+            base_dt = datetime.combine(trade_date, snapshot_time)
+            snapshot_local = pd.Timestamp(base_dt, tz=zone)
+            snapshot_utc = snapshot_local.tz_convert("UTC")
+            history = build_y_df(features, snapshot_utc)
+            if history.empty:
+                raise typer.Exit(code=1)
+            latest = history.groupby("unique_id")["ds"].max()
+            if not (latest == snapshot_utc).all():
+                raise typer.Exit(code=1)
+            future = build_x_df_for_horizon(features, snapshot_utc, horizon)
+            forecast_df = client.forecast(
+                history,
+                future,
+                snapshot_ts=snapshot_utc,
+                horizon=horizon,
+                freq=freq,
+                quantiles=quantiles,
+            )
+            if forecast_df.empty:
+                raise typer.Exit(code=1)
+            forecast_df["snapshot_utc"] = snapshot_utc
+            results.append(forecast_df)
+
+    if not results:
+        raise typer.Exit(code=1)
+
+    combined = pd.concat(results, ignore_index=True)
+    quantile_cols = [col for col in combined.columns if col.startswith("q")]
+
+    for _snapshot_ts, group in combined.groupby("snapshot_utc"):
+        group_symbols = set(group["unique_id"].astype(str))
+        if group_symbols != set(expected_symbols):
+            raise typer.Exit(code=1)
+        for column in quantile_cols:
+            if group[column].isna().any():
+                raise typer.Exit(code=1)
+
+    snapshot_values = sorted(ts.isoformat() for ts in combined["snapshot_utc"].unique())
+
+    output = combined.rename(columns={"unique_id": "symbol", "forecast_ts": "ts_utc"})
+    output["ts_utc"] = pd.to_datetime(output["ts_utc"], utc=True)
+    output.sort_values(["ts_utc", "symbol"], inplace=True)
+    ts_strings = output["ts_utc"].dt.tz_convert("UTC").dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    output.loc[:, "ts_utc"] = ts_strings.to_numpy(dtype=object)
+    output = output[["ts_utc", "symbol", *quantile_cols]]
+    output_path = forecasts_dir / "quantiles.csv"
+    output.to_csv(output_path, index=False)
+
+    meta_path = run_dir / "meta.json"
+    meta_entry = {
+        "command": "forecast",
+        "run_id": run_id,
+        "rows": len(output),
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "output_path": str(output_path),
+        "snapshots": snapshot_values,
+    }
+    if meta_path.exists():
+        existing = json.loads(meta_path.read_text(encoding="utf-8"))
+    else:
+        existing = {}
+    existing.setdefault("steps", {})
+    existing["command"] = "forecast"
+    existing["steps"]["forecast"] = meta_entry
+    meta_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+    typer.echo(f"Forecast quantiles written to {output_path}")
 
 
 @app.command()
