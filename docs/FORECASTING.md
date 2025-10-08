@@ -7,3 +7,9 @@ The intraday feature stack is anchored on return-space targets to avoid scale dr
 ## Quantiles & Batching
 
 Sprint 3 wires the framing layer directly into the TimeGPT client. For each trading day and configured ET snapshot we build a leakage-safe target frame (`unique_id, ds, y`) and project the deterministic feature block forward minute-by-minute to the forecast horizon. The client batches all series in one call with `freq="min"`, requesting `[0.25, 0.5, 0.75]` quantiles and defaulting to a 15-minute horizon (configurable via `configs/forecast.yaml`). Results are cached per `(symbol, trade_date, snapshot, horizon, quantiles)` so re-forecasts hit disk-backed storage when possible, logging cache hits to keep runs auditable. Aggregated quantiles flow into `artifacts/runs/<run_id>/forecasts/quantiles.csv`—one row per symbol, stamped in UTC—ensuring downstream evaluation receives consistent multi-series forecasts without duplicate API calls.
+
+## Snapshot policy
+
+The forecasting pipeline is driven by a scheduler that generates a series of snapshot timestamps for each trading day. The scheduler is configured in `configs/forecast.yaml` and can be customized to specify the snapshot times, the time zone, and the trading holidays.
+
+The scheduler skips weekends and holidays, and only generates snapshots for the specified times on trading days. This allows for precise control over when forecasts are generated, ensuring that they are aligned with market windows and that API quotas are respected.

@@ -14,6 +14,7 @@ import yaml
 
 from timegpt_v2.fe.base_features import build_feature_matrix
 from timegpt_v2.fe.context import FeatureContext
+from timegpt_v2.forecast.scheduler import ForecastScheduler, get_trading_holidays
 from timegpt_v2.forecast.timegpt_client import TimeGPTClient, TimeGPTConfig
 from timegpt_v2.framing.build_payloads import build_x_df_for_horizon, build_y_df
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
@@ -231,18 +232,24 @@ def forecast(
         raise typer.BadParameter("forecast.yaml must define snapshots_et")
 
     zone = ZoneInfo(tz_name)
-
     features["timestamp"] = pd.to_datetime(features["timestamp"], utc=True)
     features_et = features["timestamp"].dt.tz_convert(zone)
     features = features.assign(timestamp_et=features_et)
 
-    snapshots: list[time] = []
+    snapshot_times: list[time] = []
     for snapshot in snapshot_strs:
         try:
             parsed = datetime.strptime(str(snapshot), "%H:%M").time()
         except ValueError as exc:  # pragma: no cover - config error
             raise typer.BadParameter(f"Invalid snapshot time: {snapshot}") from exc
-        snapshots.append(parsed)
+        snapshot_times.append(parsed)
+
+    trade_dates = sorted(features["timestamp_et"].dt.date.unique())
+    holidays = get_trading_holidays(years=sorted(list(set(d.year for d in trade_dates))))
+    scheduler = ForecastScheduler(
+        dates=trade_dates, snapshots=snapshot_times, tz=zone, holidays=holidays
+    )
+    snapshots = scheduler.generate_snapshots()
 
     logger = _configure_logger(logs_dir / "forecast.log")
     cache = ForecastCache(forecasts_dir / "cache", logger=logger)
@@ -258,33 +265,27 @@ def forecast(
 
     results: list[pd.DataFrame] = []
 
-    for trade_date in sorted(features["timestamp_et"].dt.date.unique()):
-        daily_mask = features["timestamp_et"].dt.date == trade_date
-        if not daily_mask.any():
+    for snapshot_local in snapshots:
+        snapshot_utc = pd.Timestamp(snapshot_local).tz_convert("UTC")
+        history = build_y_df(features, snapshot_utc)
+        if history.empty:
             continue
-        for snapshot_time in snapshots:
-            base_dt = datetime.combine(trade_date, snapshot_time)
-            snapshot_local = pd.Timestamp(base_dt, tz=zone)
-            snapshot_utc = snapshot_local.tz_convert("UTC")
-            history = build_y_df(features, snapshot_utc)
-            if history.empty:
-                raise typer.Exit(code=1)
-            latest = history.groupby("unique_id")["ds"].max()
-            if not (latest == snapshot_utc).all():
-                raise typer.Exit(code=1)
-            future = build_x_df_for_horizon(features, snapshot_utc, horizon)
-            forecast_df = client.forecast(
-                history,
-                future,
-                snapshot_ts=snapshot_utc,
-                horizon=horizon,
-                freq=freq,
-                quantiles=quantiles,
-            )
-            if forecast_df.empty:
-                raise typer.Exit(code=1)
-            forecast_df["snapshot_utc"] = snapshot_utc
-            results.append(forecast_df)
+        latest = history.groupby("unique_id")["ds"].max()
+        if not (latest == snapshot_utc).all():
+            continue
+        future = build_x_df_for_horizon(features, snapshot_utc, horizon)
+        forecast_df = client.forecast(
+            history,
+            future,
+            snapshot_ts=snapshot_utc,
+            horizon=horizon,
+            freq=freq,
+            quantiles=quantiles,
+        )
+        if forecast_df.empty:
+            raise typer.Exit(code=1)
+        forecast_df["snapshot_utc"] = snapshot_utc
+        results.append(forecast_df)
 
     if not results:
         raise typer.Exit(code=1)
