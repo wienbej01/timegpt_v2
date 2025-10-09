@@ -12,6 +12,12 @@ import pandas as pd
 import typer
 import yaml
 
+from timegpt_v2.backtest.aggregation import (
+    PhaseConfig,
+    assign_phases,
+    compute_cost_scenarios,
+    compute_portfolio_summaries,
+)
 from timegpt_v2.backtest.grid import GridSearch
 from timegpt_v2.backtest.simulator import BacktestSimulator
 from timegpt_v2.eval.metrics_forecast import (
@@ -31,6 +37,7 @@ from timegpt_v2.framing.build_payloads import build_x_df_for_horizon, build_y_df
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
 from timegpt_v2.quality.checks import DataQualityChecker
 from timegpt_v2.quality.contracts import DataQualityPolicy
+from timegpt_v2.reports.builder import build_report
 from timegpt_v2.trading.costs import TradingCosts
 from timegpt_v2.trading.rules import RuleParams, TradingRules
 from timegpt_v2.utils.cache import ForecastCache
@@ -364,12 +371,14 @@ def backtest(
     features_path = run_dir / "features" / "features.parquet"
     prices_path = run_dir / "validation" / "clean.parquet"
     trading_cfg_path = config_dir / "trading.yaml"
+    backtest_cfg_path = config_dir / "backtest.yaml"
 
     for path, msg in (
         (forecasts_path, "Forecasts not found. Run `forecast` first."),
         (features_path, "Features not found. Run `build-features` first."),
         (prices_path, "Validated prices not found. Run `check-data` first."),
         (trading_cfg_path, "Trading config missing."),
+        (backtest_cfg_path, "Backtest config missing."),
     ):
         if not path.exists():
             raise typer.BadParameter(msg)
@@ -387,16 +396,17 @@ def backtest(
         else:
             raise typer.BadParameter("Prices file must include `close` or `adj_close` column.")
 
-    if "timestamp" not in prices.columns:
-        raise typer.BadParameter("Prices file must include a `timestamp` column.")
-    if "close" not in prices.columns:
-        if "adj_close" in prices.columns:
-            prices = prices.rename(columns={"adj_close": "close"})
-        else:
-            raise typer.BadParameter("Prices file must include `close` or `adj_close` column.")
-
     trading_cfg = _load_yaml(trading_cfg_path)
+    backtest_cfg = _load_yaml(backtest_cfg_path)
     tick_size = float(trading_cfg.get("tick_size", 0.01))
+    phase_cfg = PhaseConfig.from_mapping(  # type: ignore[arg-type]
+        {
+            "in_sample": backtest_cfg.get("in_sample_months", []) or [],
+            "oos": backtest_cfg.get("oos_months", []) or [],
+            "stress": backtest_cfg.get("stress_months", []) or [],
+        }
+    )
+    portfolio_aggregation = str(backtest_cfg.get("portfolio_aggregation", "equal_weight"))
 
     def _select_param(values: Any) -> float:
         if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
@@ -430,11 +440,30 @@ def backtest(
     )
 
     trades_df, summary_df = simulator.run(forecasts, features, prices)
+    trades_df = assign_phases(trades_df, config=phase_cfg)
+    if "trade_month" in trades_df.columns:
+        trades_df.drop(columns=["trade_month"], inplace=True)
+
+    portfolio_summary, symbol_summary = compute_portfolio_summaries(
+        trades_df,
+        aggregation=portfolio_aggregation,
+    )
 
     trades_path = trades_dir / "bt_trades.csv"
     summary_path = eval_dir / "bt_summary.csv"
-    trades_df.to_csv(trades_path, index=False)
+    portfolio_path = eval_dir / "portfolio_summary.csv"
+    per_symbol_path = eval_dir / "per_symbol_summary.csv"
+
+    trades_output = trades_df.copy()
+    for column in ("entry_ts", "exit_ts"):
+        trades_output[column] = pd.to_datetime(trades_output[column], utc=True).dt.strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    trades_output.to_csv(trades_path, index=False)
     summary_df.to_csv(summary_path, index=False)
+    portfolio_summary.to_csv(portfolio_path, index=False)
+    symbol_summary.to_csv(per_symbol_path, index=False)
 
     meta_path = run_dir / "meta.json"
     if meta_path.exists():
@@ -447,6 +476,8 @@ def backtest(
         "run_id": run_id,
         "trades_path": str(trades_path),
         "summary_path": str(summary_path),
+        "portfolio_summary_path": str(portfolio_path),
+        "per_symbol_summary_path": str(per_symbol_path),
         "trade_count": int(summary_df.iloc[0]["trade_count"]),
         "total_net_pnl": float(summary_df.iloc[0]["total_net_pnl"]),
     }
@@ -475,6 +506,7 @@ def evaluate(
     run_dir = Path("artifacts") / "runs" / run_id
     forecasts_path = run_dir / "forecasts" / "quantiles.csv"
     trades_path = run_dir / "trades" / "bt_trades.csv"
+    portfolio_path = run_dir / "eval" / "portfolio_summary.csv"
     eval_dir = run_dir / "eval"
     eval_dir.mkdir(parents=True, exist_ok=True)
 
@@ -482,54 +514,123 @@ def evaluate(
         raise typer.BadParameter("Forecasts not found. Run `forecast` first.")
     if not trades_path.exists():
         raise typer.BadParameter("Trades not found. Run `backtest` first.")
+    if not portfolio_path.exists():
+        raise typer.BadParameter("Portfolio summary not found. Run `backtest` first.")
+
+    backtest_cfg_path = config_dir / "backtest.yaml"
+    if not backtest_cfg_path.exists():
+        raise typer.BadParameter("Backtest config missing.")
+    backtest_cfg = _load_yaml(backtest_cfg_path)
+    cost_multipliers = backtest_cfg.get("cost_multipliers", [1.0, 1.5, 2.0])
+    portfolio_aggregation = str(backtest_cfg.get("portfolio_aggregation", "equal_weight"))
 
     forecasts = pd.read_csv(forecasts_path)
     trades = pd.read_csv(trades_path)
+    trades["entry_ts"] = pd.to_datetime(trades["entry_ts"], utc=True, errors="coerce")
+    trades["exit_ts"] = pd.to_datetime(trades["exit_ts"], utc=True, errors="coerce")
+
+    portfolio_summary = pd.read_csv(portfolio_path)
 
     # Forecast evaluation
-    y_true = forecasts["y_true"]  # Assuming y_true is available in forecasts
-    y_pred = forecasts["q50"]
-    q25 = forecasts["q25"]
-    q75 = forecasts["q75"]
-    y_persistence = y_true.shift(1)  # Simple persistence model
+    if {"y_true", "q25", "q50", "q75"} <= set(forecasts.columns):
+        y_true = forecasts["y_true"]
+        y_pred = forecasts["q50"]
+        q25 = forecasts["q25"]
+        q75 = forecasts["q75"]
+        y_persistence = y_true.shift(1)
 
-    forecast_metrics = {
-        "mae": mae(y_true, y_pred),
-        "rmse": rmse(y_true, y_pred),
-        "rmae": rmae(y_true, y_pred, y_persistence),
-        "rrmse": rrmse(y_true, y_pred, y_persistence),
-        "pinball_loss_q25": pinball_loss(y_true, q25, 0.25),
-        "pinball_loss_q75": pinball_loss(y_true, q75, 0.75),
-        "pit_coverage": pit_coverage(y_true, q25, q75),
-    }
-    forecast_metrics_df = pd.DataFrame([forecast_metrics])
-    forecast_metrics_path = eval_dir / "forecast_metrics.csv"
-    forecast_metrics_df.to_csv(forecast_metrics_path, index=False)
-    typer.echo(f"Forecast metrics written to {forecast_metrics_path}")
+        forecast_metrics = {
+            "mae": mae(y_true, y_pred),
+            "rmse": rmse(y_true, y_pred),
+            "rmae": rmae(y_true, y_pred, y_persistence),
+            "rrmse": rrmse(y_true, y_pred, y_persistence),
+            "pinball_loss_q25": pinball_loss(y_true, q25, 0.25),
+            "pinball_loss_q75": pinball_loss(y_true, q75, 0.75),
+            "pit_coverage": pit_coverage(y_true, q25, q75),
+        }
+        forecast_metrics_df = pd.DataFrame([forecast_metrics])
+        forecast_metrics_path = eval_dir / "forecast_metrics.csv"
+        forecast_metrics_df.to_csv(forecast_metrics_path, index=False)
+        typer.echo(f"Forecast metrics written to {forecast_metrics_path}")
+    else:
+        forecast_metrics = {}
 
     # Trading evaluation
-    pnl = trades["pnl"]
+    net_pnl_series = trades.get("net_pnl")
+    if net_pnl_series is None:
+        raise typer.BadParameter("Trades file missing `net_pnl` column.")
+    net_pnl_series = trades.sort_values("entry_ts").set_index("entry_ts")["net_pnl"].astype(float)
     trading_metrics = {
-        "sharpe_ratio": sharpe_ratio(pnl, trading_days=252),
-        "max_drawdown": max_drawdown(pnl),
-        "hit_rate": hit_rate(pnl),
-        "total_pnl": pnl.sum(),
+        "sharpe_ratio": sharpe_ratio(net_pnl_series, trading_days=252),
+        "max_drawdown": max_drawdown(net_pnl_series),
+        "hit_rate": hit_rate(net_pnl_series),
+        "total_pnl": net_pnl_series.sum(),
     }
     trading_metrics_df = pd.DataFrame([trading_metrics])
     trading_metrics_path = eval_dir / "bt_summary.csv"
     trading_metrics_df.to_csv(trading_metrics_path, index=False)
     typer.echo(f"Trading metrics written to {trading_metrics_path}")
 
+    cost_table = compute_cost_scenarios(
+        trades,
+        multipliers=cost_multipliers,
+        aggregation=portfolio_aggregation,
+    )
+    cost_sensitivity_path = eval_dir / "cost_sensitivity.csv"
+    cost_table.to_csv(cost_sensitivity_path, index=False)
+    typer.echo(f"Cost sensitivity written to {cost_sensitivity_path}")
+
     # Gates
-    if forecast_metrics["rmae"] >= 0.95 or forecast_metrics["rrmse"] >= 0.97:
-        typer.echo("Forecast evaluation gates failed.")
+    if forecast_metrics:
+        if forecast_metrics["rmae"] >= 0.95 or forecast_metrics["rrmse"] >= 0.97:
+            typer.echo("Forecast evaluation gates failed.")
+            raise typer.Exit(code=1)
+
+        if not (0.48 <= forecast_metrics["pit_coverage"] <= 0.52):
+            typer.echo("Calibration gate failed.")
+            raise typer.Exit(code=1)
+
+    oos_row = portfolio_summary[
+        (portfolio_summary["phase"] == "oos") & (portfolio_summary["level"] == "portfolio")
+    ]
+    if oos_row.empty:
+        typer.echo("Missing OOS portfolio metrics.")
+        raise typer.Exit(code=1)
+    oos_metrics = oos_row.iloc[0]
+    if (
+        oos_metrics.get("sharpe", 0.0) < 0.5
+        or oos_metrics.get("total_net_pnl", 0.0) <= 0.0
+        or oos_metrics.get("hit_rate", 0.0) < 0.48
+    ):
+        typer.echo("OOS portfolio gates failed.")
         raise typer.Exit(code=1)
 
-    if not (0.48 <= forecast_metrics["pit_coverage"] <= 0.52):
-        typer.echo("Calibration gate failed.")
+    c15 = cost_table.loc[(cost_table["cost_multiplier"] - 1.5).abs() < 1e-6]
+    if c15.empty or c15.iloc[0]["total_net_pnl"] < 0.0:
+        typer.echo("Cost sensitivity gate failed at 1.5× costs.")
         raise typer.Exit(code=1)
 
-    typer.echo("All evaluation gates passed.")
+    meta_path = run_dir / "meta.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    else:
+        meta = {}
+    steps = meta.setdefault("steps", {})
+    evaluate_meta = steps.setdefault("evaluate", {})
+    meta["command"] = "evaluate"
+    evaluate_meta.update(
+        {
+            "run_id": run_id,
+            "forecast_metrics_path": (
+                str(eval_dir / "forecast_metrics.csv") if forecast_metrics else None
+            ),
+            "trading_metrics_path": str(trading_metrics_path),
+            "cost_sensitivity_path": str(cost_sensitivity_path),
+        }
+    )
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    typer.echo("Evaluation gates passed.")
 
 
 @app.command()
@@ -538,7 +639,21 @@ def report(
     run_id: str = RUN_ID_OPTION,
 ) -> None:
     """Assemble final report for the run."""
-    typer.echo(f"report stub: run_id={run_id}, config_dir={config_dir}")
+    run_dir = Path("artifacts") / "runs" / run_id
+    report_path = build_report(run_dir)
+
+    meta_path = run_dir / "meta.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    else:
+        meta = {}
+    meta.setdefault("steps", {})
+    meta.setdefault("steps", {}).setdefault("report", {})
+    meta["command"] = "report"
+    meta["steps"]["report"].update({"report_path": str(report_path)})
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    typer.echo(f"Robustness report written to {report_path}")
 
 
 @app.command()

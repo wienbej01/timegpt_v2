@@ -22,6 +22,23 @@ Sprint 6 introduced a full intraday backtester and sweep workflow:
 This layout enables reproducible parameter studies while keeping single-run artifacts lightweight
 and auditable.
 
+## OOS portfolio & cost sensitivity
+
+Sprint 8 extends the evaluation stack beyond a single-sample, single-symbol view:
+
+- `timegpt_v2.cli backtest` now annotates every trade with its calendar month and regime
+  (in-sample, out-of-sample, stress) using the configuration in `configs/backtest.yaml`. Portfolio
+  summaries aggregate net P&L, hit-rate, and Sharpe across tickers with equal-weight daily returns
+  and persist to `eval/portfolio_summary.csv`.
+- `timegpt_v2.cli evaluate` reads those summaries, recomputes performance under configured cost
+  multipliers, and enforces the Sprint 8 KPI gates (OOS Sharpe ≥ 0.5, net P&L > 0, hit-rate ≥ 48%,
+  and non-negative net P&L at 1.5× costs). Results are written to `eval/cost_sensitivity.csv`.
+- `timegpt_v2.reports.builder.build_report` assembles `reports/robustness_report.md`, highlighting
+  the OOS portfolio metrics alongside the cost-sensitivity table for review.
+
+These hooks document how portfolio viability and transaction-cost robustness are tracked as the
+system moves beyond the initial calibration window.
+
 ## Gates & failure policy
 
 The evaluation pipeline includes a set of gates to ensure that the performance of the model and the trading strategy meet a minimum set of criteria. If any of these gates fail, the `evaluate` command will exit with a non-zero exit code.

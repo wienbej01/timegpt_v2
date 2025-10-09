@@ -59,6 +59,7 @@ line_length = 100
 
 [tool.ruff]
 line-length = 100
+extend-exclude = ["sip_pipeline_local.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "N", "S"]

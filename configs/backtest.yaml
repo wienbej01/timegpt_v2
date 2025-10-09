@@ -1,2 +1,5 @@
+in_sample_months: ["2024-07"]
+oos_months: ["2024-08"]
+stress_months: []
 cost_multipliers: [1.0, 1.5, 2.0]
 portfolio_aggregation: equal_weight
