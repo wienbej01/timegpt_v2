@@ -13,6 +13,15 @@ import typer
 import yaml
 
 from timegpt_v2.backtest.grid import GridSearch
+from timegpt_v2.eval.metrics_forecast import (
+    mae,
+    pinball_loss,
+    pit_coverage,
+    rmae,
+    rmse,
+    rrmse,
+)
+from timegpt_v2.eval.metrics_trading import hit_rate, max_drawdown, sharpe_ratio
 from timegpt_v2.fe.base_features import build_feature_matrix
 from timegpt_v2.fe.context import FeatureContext
 from timegpt_v2.forecast.scheduler import ForecastScheduler, get_trading_holidays
@@ -349,7 +358,64 @@ def evaluate(
     run_id: str = RUN_ID_OPTION,
 ) -> None:
     """Evaluate model and trading performance metrics."""
-    typer.echo(f"evaluate stub: run_id={run_id}, config_dir={config_dir}")
+    run_dir = Path("artifacts") / "runs" / run_id
+    forecasts_path = run_dir / "forecasts" / "quantiles.csv"
+    trades_path = run_dir / "trades" / "bt_trades.csv"
+    eval_dir = run_dir / "eval"
+    eval_dir.mkdir(parents=True, exist_ok=True)
+
+    if not forecasts_path.exists():
+        raise typer.BadParameter("Forecasts not found. Run `forecast` first.")
+    if not trades_path.exists():
+        raise typer.BadParameter("Trades not found. Run `backtest` first.")
+
+    forecasts = pd.read_csv(forecasts_path)
+    trades = pd.read_csv(trades_path)
+
+    # Forecast evaluation
+    y_true = forecasts["y_true"]  # Assuming y_true is available in forecasts
+    y_pred = forecasts["q50"]
+    q25 = forecasts["q25"]
+    q75 = forecasts["q75"]
+    y_persistence = y_true.shift(1)  # Simple persistence model
+
+    forecast_metrics = {
+        "mae": mae(y_true, y_pred),
+        "rmse": rmse(y_true, y_pred),
+        "rmae": rmae(y_true, y_pred, y_persistence),
+        "rrmse": rrmse(y_true, y_pred, y_persistence),
+        "pinball_loss_q25": pinball_loss(y_true, q25, 0.25),
+        "pinball_loss_q75": pinball_loss(y_true, q75, 0.75),
+        "pit_coverage": pit_coverage(y_true, q25, q75),
+    }
+    forecast_metrics_df = pd.DataFrame([forecast_metrics])
+    forecast_metrics_path = eval_dir / "forecast_metrics.csv"
+    forecast_metrics_df.to_csv(forecast_metrics_path, index=False)
+    typer.echo(f"Forecast metrics written to {forecast_metrics_path}")
+
+    # Trading evaluation
+    pnl = trades["pnl"]
+    trading_metrics = {
+        "sharpe_ratio": sharpe_ratio(pnl, trading_days=252),
+        "max_drawdown": max_drawdown(pnl),
+        "hit_rate": hit_rate(pnl),
+        "total_pnl": pnl.sum(),
+    }
+    trading_metrics_df = pd.DataFrame([trading_metrics])
+    trading_metrics_path = eval_dir / "bt_summary.csv"
+    trading_metrics_df.to_csv(trading_metrics_path, index=False)
+    typer.echo(f"Trading metrics written to {trading_metrics_path}")
+
+    # Gates
+    if forecast_metrics["rmae"] >= 0.95 or forecast_metrics["rrmse"] >= 0.97:
+        typer.echo("Forecast evaluation gates failed.")
+        raise typer.Exit(code=1)
+
+    if not (0.48 <= forecast_metrics["pit_coverage"] <= 0.52):
+        typer.echo("Calibration gate failed.")
+        raise typer.Exit(code=1)
+
+    typer.echo("All evaluation gates passed.")
 
 
 @app.command()
