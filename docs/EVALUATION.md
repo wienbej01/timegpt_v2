@@ -33,6 +33,9 @@ Sprint 8 extends the evaluation stack beyond a single-sample, single-symbol view
 - `timegpt_v2.cli evaluate` reads those summaries, recomputes performance under configured cost
   multipliers, and enforces the Sprint 8 KPI gates (OOS Sharpe ≥ 0.5, net P&L > 0, hit-rate ≥ 48%,
   and non-negative net P&L at 1.5× costs). Results are written to `eval/cost_sensitivity.csv`.
+- Forecast evaluation now produces `eval/forecast_metrics.csv` (per-symbol MAE, rMAE, rRMSE,
+  pinball loss, and PIT coverage) and `eval/pit_reliability.csv` (calibration bins), exiting
+  non-zero when the Sprint 7 coverage gates fail.
 - `timegpt_v2.reports.builder.build_report` assembles `reports/robustness_report.md`, highlighting
   the OOS portfolio metrics alongside the cost-sensitivity table for review.
 

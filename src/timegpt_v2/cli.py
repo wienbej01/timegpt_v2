@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 import typer
 import yaml
@@ -20,6 +21,7 @@ from timegpt_v2.backtest.aggregation import (
 )
 from timegpt_v2.backtest.grid import GridSearch
 from timegpt_v2.backtest.simulator import BacktestSimulator
+from timegpt_v2.eval.calibration import reliability_curve
 from timegpt_v2.eval.metrics_forecast import (
     mae,
     pinball_loss,
@@ -574,35 +576,85 @@ def evaluate(
     portfolio_aggregation = str(backtest_cfg.get("portfolio_aggregation", "equal_weight"))
 
     forecasts = pd.read_csv(forecasts_path)
+    required_forecast_cols = {"symbol", "q25", "q50", "q75", "y_true", "ts_utc"}
+    missing_forecast_cols = required_forecast_cols - set(forecasts.columns)
+    if missing_forecast_cols:
+        raise typer.BadParameter(
+            f"Forecasts file missing required columns: {sorted(missing_forecast_cols)}"
+        )
+    forecasts["ts_utc"] = pd.to_datetime(forecasts["ts_utc"], utc=True, errors="coerce")
+    if forecasts["ts_utc"].isna().any():
+        raise typer.BadParameter("Forecasts contain invalid timestamps in `ts_utc`.")
+
     trades = pd.read_csv(trades_path)
     trades["entry_ts"] = pd.to_datetime(trades["entry_ts"], utc=True, errors="coerce")
     trades["exit_ts"] = pd.to_datetime(trades["exit_ts"], utc=True, errors="coerce")
 
     portfolio_summary = pd.read_csv(portfolio_path)
 
-    # Forecast evaluation
-    if {"y_true", "q25", "q50", "q75"} <= set(forecasts.columns):
-        y_true = forecasts["y_true"]
-        y_pred = forecasts["q50"]
-        q25 = forecasts["q25"]
-        q75 = forecasts["q75"]
+    # Forecast evaluation per symbol
+    forecast_rows: list[dict[str, object]] = []
+    reliability_rows: list[dict[str, object]] = []
+    for symbol, group in forecasts.sort_values("ts_utc").groupby("symbol", sort=True):
+        y_true = group["y_true"].astype(float)
+        q50 = group["q50"].astype(float)
+        q25 = group["q25"].astype(float)
+        q75 = group["q75"].astype(float)
         y_persistence = y_true.shift(1)
+        valid_mask = y_persistence.notna()
+        if valid_mask.sum() == 0:
+            continue
 
-        forecast_metrics = {
-            "mae": mae(y_true, y_pred),
-            "rmse": rmse(y_true, y_pred),
-            "rmae": rmae(y_true, y_pred, y_persistence),
-            "rrmse": rrmse(y_true, y_pred, y_persistence),
-            "pinball_loss_q25": pinball_loss(y_true, q25, 0.25),
-            "pinball_loss_q75": pinball_loss(y_true, q75, 0.75),
-            "pit_coverage": pit_coverage(y_true, q25, q75),
-        }
-        forecast_metrics_df = pd.DataFrame([forecast_metrics])
-        forecast_metrics_path = eval_dir / "forecast_metrics.csv"
-        forecast_metrics_df.to_csv(forecast_metrics_path, index=False)
-        typer.echo(f"Forecast metrics written to {forecast_metrics_path}")
-    else:
-        forecast_metrics = {}
+        yt = y_true[valid_mask]
+        yp = q50[valid_mask]
+        ypersistence = y_persistence[valid_mask].astype(float)
+        q25_valid = q25[valid_mask]
+        q75_valid = q75[valid_mask]
+
+        forecast_rows.append(
+            {
+                "symbol": symbol,
+                "count": int(len(yt)),
+                "mae": float(mae(yt, yp)),
+                "rmse": float(rmse(yt, yp)),
+                "rmae": float(rmae(yt, yp, ypersistence)),
+                "rrmse": float(rrmse(yt, yp, ypersistence)),
+                "pinball_loss_q25": float(pinball_loss(yt, q25_valid, 0.25)),
+                "pinball_loss_q75": float(pinball_loss(yt, q75_valid, 0.75)),
+                "pit_coverage": float(pit_coverage(yt, q25_valid, q75_valid)),
+            }
+        )
+
+        binary_actual = (y_true <= q50).astype(float)
+        prob_pred = np.full(len(binary_actual), 0.5, dtype=float)
+        bin_pred, bin_true = reliability_curve(binary_actual, prob_pred, n_bins=10)
+        for idx, (pred_val, true_val) in enumerate(zip(bin_pred, bin_true, strict=False)):
+            reliability_rows.append(
+                {
+                    "symbol": symbol,
+                    "bin": idx,
+                    "prob_pred": float(pred_val),
+                    "prob_true": float(true_val),
+                }
+            )
+
+    if not forecast_rows:
+        raise typer.BadParameter(
+            "Forecasts do not contain enough data per symbol to compute metrics."
+        )
+
+    forecast_metrics_df = pd.DataFrame(forecast_rows)
+    forecast_metrics_path = eval_dir / "forecast_metrics.csv"
+    forecast_metrics_df.to_csv(forecast_metrics_path, index=False)
+    typer.echo(f"Forecast metrics written to {forecast_metrics_path}")
+
+    reliability_df = pd.DataFrame(reliability_rows)
+    reliability_path = eval_dir / "pit_reliability.csv"
+    reliability_df.to_csv(reliability_path, index=False)
+
+    median_rmae = float(forecast_metrics_df["rmae"].median())
+    median_rrmse = float(forecast_metrics_df["rrmse"].median())
+    median_pit = float(forecast_metrics_df["pit_coverage"].median())
 
     # Trading evaluation
     net_pnl_series = trades.get("net_pnl")
@@ -630,14 +682,13 @@ def evaluate(
     typer.echo(f"Cost sensitivity written to {cost_sensitivity_path}")
 
     # Gates
-    if forecast_metrics:
-        if forecast_metrics["rmae"] >= 0.95 or forecast_metrics["rrmse"] >= 0.97:
-            typer.echo("Forecast evaluation gates failed.")
-            raise typer.Exit(code=1)
+    if median_rmae >= 0.95 or median_rrmse >= 0.97:
+        typer.echo("Forecast evaluation gates failed.")
+        raise typer.Exit(code=1)
 
-        if not (0.48 <= forecast_metrics["pit_coverage"] <= 0.52):
-            typer.echo("Calibration gate failed.")
-            raise typer.Exit(code=1)
+    if abs(median_pit - 0.5) > 0.02:
+        typer.echo("Calibration gate failed.")
+        raise typer.Exit(code=1)
 
     oos_row = portfolio_summary[
         (portfolio_summary["phase"] == "oos") & (portfolio_summary["level"] == "portfolio")
@@ -670,11 +721,13 @@ def evaluate(
     evaluate_meta.update(
         {
             "run_id": run_id,
-            "forecast_metrics_path": (
-                str(eval_dir / "forecast_metrics.csv") if forecast_metrics else None
-            ),
+            "forecast_metrics_path": str(forecast_metrics_path),
             "trading_metrics_path": str(trading_metrics_path),
             "cost_sensitivity_path": str(cost_sensitivity_path),
+            "reliability_path": str(reliability_path),
+            "median_rmae": median_rmae,
+            "median_rrmse": median_rrmse,
+            "median_pit_coverage": median_pit,
         }
     )
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
