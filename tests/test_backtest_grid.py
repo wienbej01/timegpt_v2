@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -9,73 +11,108 @@ from timegpt_v2.backtest.grid import GridSearch
 
 
 @pytest.fixture
-def trading_cfg() -> dict:
-    """Return a sample trading config for testing."""
-    return {
+def synthetic_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Return aligned forecasts, features, and prices for the sweep tests."""
+    start_ts = pd.Timestamp("2024-01-02 14:30", tz="UTC")
+    index = pd.date_range(start_ts, periods=20, freq="1min", tz="UTC")
+
+    close_path = pd.Series(
+        [
+            100.00,
+            100.02,
+            100.05,
+            100.30,
+            100.32,
+            100.60,
+            100.62,
+            100.90,
+            100.92,
+            101.10,
+            101.12,
+            101.35,
+            101.40,
+            101.55,
+            101.80,
+            101.82,
+            101.60,
+            101.58,
+            101.55,
+            101.50,
+        ],
+        index=index,
+    )
+
+    prices = pd.DataFrame(
+        {
+            "timestamp": index,
+            "symbol": "SYN",
+            "close": close_path.to_numpy(),
+        }
+    )
+
+    features = pd.DataFrame(
+        {
+            "timestamp": index,
+            "symbol": "SYN",
+            "rv_5m": np.full(len(index), 0.04),
+        }
+    )
+
+    snapshot_positions = [3, 5]
+    forecasts_rows = []
+    for pos in snapshot_positions:
+        ts = index[pos]
+        last_price = float(close_path.iloc[pos])
+        forecasts_rows.append(
+            {
+                "ts_utc": ts.isoformat(),
+                "symbol": "SYN",
+                "q25": last_price + 0.03,
+                "q50": last_price + 0.12,
+                "q75": last_price + 0.20,
+            }
+        )
+
+    forecasts = pd.DataFrame(forecasts_rows)
+    return forecasts, features, prices
+
+
+def test_grid_search_outputs_unique_hashes(
+    tmp_path: Path, synthetic_inputs: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+) -> None:
+    """Each grid point must produce its own summary file and distinct metrics."""
+
+    forecasts, features, prices = synthetic_inputs
+    trading_cfg = {
         "k_sigma": [0.5, 1.0],
-        "s_stop": [1.0, 1.5],
+        "s_stop": [1.0],
         "s_take": [1.0],
         "time_stop_et": "15:55",
         "fees_bps": 0.5,
-        "half_spread_ticks": {"AAPL": 1},
+        "half_spread_ticks": {"SYN": 1},
         "daily_trade_cap": 3,
         "max_open_per_symbol": 1,
     }
 
-
-@pytest.fixture
-def forecasts() -> pd.DataFrame:
-    """Return a sample forecasts DataFrame for testing."""
-    return pd.DataFrame(
-        {
-            "snapshot_utc": pd.to_datetime(["2024-07-01 10:00:00"]),
-            "symbol": ["AAPL"],
-            "q25": [101.0],
-            "q50": [102.0],
-            "q75": [103.0],
-        }
+    logger = logging.getLogger("test.grid")
+    grid_search = GridSearch(
+        trading_cfg=trading_cfg,
+        logger=logger,
+        output_root=tmp_path,
+        tick_size=0.01,
     )
 
-
-@pytest.fixture
-def features() -> pd.DataFrame:
-    """Return a sample features DataFrame for testing."""
-    index = pd.to_datetime(
-        [
-            "2024-07-01 10:00:00",
-            "2024-07-01 10:01:00",
-            "2024-07-01 10:02:00",
-        ],
-        utc=True,
-    )
-    return pd.DataFrame({"rv_5m": [1.0, 1.0, 1.0]}, index=index)
-
-
-@pytest.fixture
-def prices() -> pd.DataFrame:
-    """Return a sample prices DataFrame for testing."""
-    index = pd.to_datetime(
-        [
-            "2024-07-01 09:59:00",
-            "2024-07-01 10:00:00",
-            "2024-07-01 10:01:00",
-            "2024-07-01 10:02:00",
-        ],
-        utc=True,
-    )
-    return pd.DataFrame({"AAPL": [99.0, 100.0, 101.0, 102.0]}, index=index)
-
-
-def test_grid_search_run(
-    trading_cfg: dict,
-    forecasts: pd.DataFrame,
-    features: pd.DataFrame,
-    prices: pd.DataFrame,
-) -> None:
-    """Test the run method of the GridSearch."""
-    logger = logging.getLogger(__name__)
-    grid_search = GridSearch(trading_cfg=trading_cfg, logger=logger)
     results = grid_search.run(forecasts, features, prices)
 
-    assert len(results) == 4
-    assert len(results["grid_point"].unique()) == 4
+    assert len(results) == 2
+    assert results["combo_hash"].is_unique
+
+    summary_paths = [
+        tmp_path / combo_hash / "bt_summary.csv" for combo_hash in results["combo_hash"]
+    ]
+    for path in summary_paths:
+        assert path.exists(), f"Expected summary at {path}"
+
+    trade_counts = results.set_index("k_sigma")["trade_count"].to_dict()
+    assert trade_counts[0.5] > 0
+    assert trade_counts[1.0] == 0

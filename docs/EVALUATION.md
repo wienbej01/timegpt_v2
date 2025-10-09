@@ -4,11 +4,23 @@ This document describes the evaluation methods used in the TimeGPT Intraday v2 p
 
 ## Parameter sweeps & reproducibility
 
-The project includes a grid search capability to sweep over different trading parameters and evaluate their performance. The grid search is implemented in the `backtest/grid.py` module and can be run from the CLI using the `sweep` command.
+Sprint 6 introduced a full intraday backtester and sweep workflow:
 
-The grid search iterates over a grid of parameters defined in the `configs/trading.yaml` file. For each combination of parameters, it runs a backtest and saves the results to a separate file under the `eval/grid/<combo_hash>` directory, where `<combo_hash>` is a hash of the parameter combination. This ensures that the results of each run are reproducible and can be easily compared.
+- `timegpt_v2.backtest.simulator.BacktestSimulator` executes an event-driven loop. Entries are
+  evaluated at each forecast snapshot per symbol, and exits are walked forward minute-by-minute
+  until a variance, take-profit, or 15:55 ET time stop triggers. Each run emits a trade blotter at
+  `artifacts/runs/<run_id>/trades/bt_trades.csv` and an aggregate summary in
+  `artifacts/runs/<run_id>/eval/bt_summary.csv`. Net P&L reconciles exactly to the trade ledger.
+- `timegpt_v2.backtest.grid.GridSearch` iterates the cross-product of
+  `k_sigma × s_stop × s_take`. Every combination is hashed to `eval/grid/<combo_hash>/` where the
+  corresponding `bt_summary.csv` is written. The hash is also used to seed stochastic components,
+  guaranteeing deterministic outputs for each grid point.
+- The CLI `timegpt_v2.cli sweep` command loads forecasts, features, and validated price bars, then
+  generates a ranked summary table while persisting the per-grid folders. Distinct (k, s) settings
+  therefore produce distinct statistics, fixing the historical “identical stats” bug.
 
-To ensure that different parameter settings lead to different outcomes, the backtest simulator is instantiated with a new set of trading rules for each run. This prevents the simulator from reusing cached signals or P&L from previous runs.
+This layout enables reproducible parameter studies while keeping single-run artifacts lightweight
+and auditable.
 
 ## Gates & failure policy
 

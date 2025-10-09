@@ -13,6 +13,7 @@ import typer
 import yaml
 
 from timegpt_v2.backtest.grid import GridSearch
+from timegpt_v2.backtest.simulator import BacktestSimulator
 from timegpt_v2.eval.metrics_forecast import (
     mae,
     pinball_loss,
@@ -30,6 +31,8 @@ from timegpt_v2.framing.build_payloads import build_x_df_for_horizon, build_y_df
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
 from timegpt_v2.quality.checks import DataQualityChecker
 from timegpt_v2.quality.contracts import DataQualityPolicy
+from timegpt_v2.trading.costs import TradingCosts
+from timegpt_v2.trading.rules import RuleParams, TradingRules
 from timegpt_v2.utils.cache import ForecastCache
 
 app = typer.Typer(help="TimeGPT Intraday v2 command line interface")
@@ -77,8 +80,8 @@ def _json_default(obj: object) -> str:
     return str(obj)
 
 
-def _configure_logger(log_path: Path) -> logging.Logger:
-    logger = logging.getLogger("timegpt_v2.forecast")
+def _configure_logger(log_path: Path, *, name: str = "timegpt_v2.cli") -> logging.Logger:
+    logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     logger.handlers = []
     handler = logging.FileHandler(log_path, encoding="utf-8")
@@ -261,7 +264,7 @@ def forecast(
     )
     snapshots = scheduler.generate_snapshots()
 
-    logger = _configure_logger(logs_dir / "forecast.log")
+    logger = _configure_logger(logs_dir / "forecast.log", name="timegpt_v2.forecast")
     cache = ForecastCache(forecasts_dir / "cache", logger=logger)
     client = TimeGPTClient(
         cache=cache,
@@ -349,7 +352,118 @@ def backtest(
     run_id: str = RUN_ID_OPTION,
 ) -> None:
     """Run trading backtest using generated forecasts."""
-    typer.echo(f"backtest stub: run_id={run_id}, config_dir={config_dir}")
+    run_dir = Path("artifacts") / "runs" / run_id
+    logs_dir = run_dir / "logs"
+    trades_dir = run_dir / "trades"
+    eval_dir = run_dir / "eval"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    trades_dir.mkdir(parents=True, exist_ok=True)
+    eval_dir.mkdir(parents=True, exist_ok=True)
+
+    forecasts_path = run_dir / "forecasts" / "quantiles.csv"
+    features_path = run_dir / "features" / "features.parquet"
+    prices_path = run_dir / "validation" / "clean.parquet"
+    trading_cfg_path = config_dir / "trading.yaml"
+
+    for path, msg in (
+        (forecasts_path, "Forecasts not found. Run `forecast` first."),
+        (features_path, "Features not found. Run `build-features` first."),
+        (prices_path, "Validated prices not found. Run `check-data` first."),
+        (trading_cfg_path, "Trading config missing."),
+    ):
+        if not path.exists():
+            raise typer.BadParameter(msg)
+
+    logger = _configure_logger(logs_dir / "backtest.log", name="timegpt_v2.backtest")
+
+    forecasts = pd.read_csv(forecasts_path)
+    features = pd.read_parquet(features_path)
+    prices = pd.read_parquet(prices_path)
+    if "timestamp" not in prices.columns:
+        raise typer.BadParameter("Prices file must include a `timestamp` column.")
+    if "close" not in prices.columns:
+        if "adj_close" in prices.columns:
+            prices = prices.rename(columns={"adj_close": "close"})
+        else:
+            raise typer.BadParameter("Prices file must include `close` or `adj_close` column.")
+
+    if "timestamp" not in prices.columns:
+        raise typer.BadParameter("Prices file must include a `timestamp` column.")
+    if "close" not in prices.columns:
+        if "adj_close" in prices.columns:
+            prices = prices.rename(columns={"adj_close": "close"})
+        else:
+            raise typer.BadParameter("Prices file must include `close` or `adj_close` column.")
+
+    trading_cfg = _load_yaml(trading_cfg_path)
+    tick_size = float(trading_cfg.get("tick_size", 0.01))
+
+    def _select_param(values: Any) -> float:
+        if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+            if not values:
+                raise typer.BadParameter("Trading grid values cannot be empty.")
+            return float(values[0])
+        return float(values)
+
+    params = RuleParams(
+        k_sigma=_select_param(trading_cfg.get("k_sigma")),
+        s_stop=_select_param(trading_cfg.get("s_stop")),
+        s_take=_select_param(trading_cfg.get("s_take")),
+    )
+
+    trading_costs = TradingCosts(
+        fee_bps=float(trading_cfg.get("fees_bps", 0.0)),
+        half_spread_ticks=trading_cfg.get("half_spread_ticks", {}),
+    )
+    time_stop = datetime.strptime(str(trading_cfg.get("time_stop_et", "15:55")), "%H:%M").time()
+    rules = TradingRules(
+        costs=trading_costs,
+        time_stop=time_stop,
+        daily_trade_cap=int(trading_cfg.get("daily_trade_cap", 1)),
+        max_open_per_symbol=int(trading_cfg.get("max_open_per_symbol", 1)),
+    )
+    simulator = BacktestSimulator(
+        rules=rules,
+        params=params,
+        logger=logger,
+        tick_size=tick_size,
+    )
+
+    trades_df, summary_df = simulator.run(forecasts, features, prices)
+
+    trades_path = trades_dir / "bt_trades.csv"
+    summary_path = eval_dir / "bt_summary.csv"
+    trades_df.to_csv(trades_path, index=False)
+    summary_df.to_csv(summary_path, index=False)
+
+    meta_path = run_dir / "meta.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    else:
+        meta = {}
+    meta.setdefault("steps", {})
+    meta["command"] = "backtest"
+    meta["steps"]["backtest"] = {
+        "run_id": run_id,
+        "trades_path": str(trades_path),
+        "summary_path": str(summary_path),
+        "trade_count": int(summary_df.iloc[0]["trade_count"]),
+        "total_net_pnl": float(summary_df.iloc[0]["total_net_pnl"]),
+    }
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    _append_log(
+        logs_dir / "events.log",
+        {
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "event": "backtest",
+            "run_id": run_id,
+            "trade_count": int(summary_df.iloc[0]["trade_count"]),
+        },
+    )
+
+    typer.echo(f"Trades written to {trades_path}")
+    typer.echo(f"Summary written to {summary_path}")
 
 
 @app.command()
@@ -455,8 +569,14 @@ def sweep(
     trading_cfg_path = grid_config or config_dir / "trading.yaml"
     trading_cfg = _load_yaml(trading_cfg_path)
 
-    logger = _configure_logger(run_dir / "logs" / "sweep.log")
-    grid_search = GridSearch(trading_cfg=trading_cfg, logger=logger)
+    logger = _configure_logger(run_dir / "logs" / "sweep.log", name="timegpt_v2.sweep")
+    tick_size = float(trading_cfg.get("tick_size", 0.01))
+    grid_search = GridSearch(
+        trading_cfg=trading_cfg,
+        logger=logger,
+        output_root=output_dir,
+        tick_size=tick_size,
+    )
     results = grid_search.run(forecasts, features, prices)
 
     output_path = output_dir / "summary.csv"
