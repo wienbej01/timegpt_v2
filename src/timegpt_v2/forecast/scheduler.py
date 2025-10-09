@@ -16,11 +16,18 @@ class ForecastScheduler:
         snapshots: Sequence[time],
         tz: str | ZoneInfo,
         holidays: Sequence[date] | None = None,
+        *,
+        active_windows: Sequence[tuple[time, time]] | None = None,
+        max_snapshots_per_day: int | None = None,
+        max_total_snapshots: int | None = None,
     ) -> None:
         self.dates = sorted(list(set(dates)))
         self.snapshots = sorted(list(set(snapshots)))
         self.tz = ZoneInfo(tz) if isinstance(tz, str) else tz
         self.holidays = set(holidays) if holidays else set()
+        self.active_windows = tuple(active_windows) if active_windows else tuple()
+        self.max_snapshots_per_day = int(max_snapshots_per_day) if max_snapshots_per_day else None
+        self.max_total_snapshots = int(max_total_snapshots) if max_total_snapshots else None
 
     def _is_trading_day(self, dt: date) -> bool:
         """Check if a date is a trading day (not a weekend or holiday)."""
@@ -33,11 +40,37 @@ class ForecastScheduler:
     def generate_snapshots(self) -> list[datetime]:
         """Generate a list of snapshot timestamps."""
         snapshots: list[datetime] = []
+        reached_limit = False
         for dt in self.dates:
             if self._is_trading_day(dt):
-                for t in self.snapshots:
-                    snapshots.append(datetime.combine(dt, t, tzinfo=self.tz))
+                day_snapshots: list[datetime] = []
+                for snapshot_time in self.snapshots:
+                    if not self._within_active_window(snapshot_time):
+                        continue
+                    day_snapshots.append(datetime.combine(dt, snapshot_time, tzinfo=self.tz))
+
+                if self.max_snapshots_per_day is not None:
+                    day_snapshots = day_snapshots[: self.max_snapshots_per_day]
+
+                for snapshot in day_snapshots:
+                    snapshots.append(snapshot)
+                    if (
+                        self.max_total_snapshots is not None
+                        and len(snapshots) >= self.max_total_snapshots
+                    ):
+                        reached_limit = True
+                        break
+                if reached_limit:
+                    break
         return sorted(snapshots)
+
+    def _within_active_window(self, snapshot_time: time) -> bool:
+        if not self.active_windows:
+            return True
+        for start, end in self.active_windows:
+            if start <= snapshot_time <= end:
+                return True
+        return False
 
 
 def get_trading_holidays(years: Sequence[int]) -> list[date]:

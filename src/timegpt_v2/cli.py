@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any
@@ -96,6 +96,13 @@ def _configure_logger(log_path: Path, *, name: str = "timegpt_v2.cli") -> loggin
     logger.addHandler(handler)
     logger.propagate = False
     return logger
+
+
+def _iter_chunks(items: Sequence[str], size: int) -> Iterable[list[str]]:
+    if size <= 0:
+        raise ValueError("chunk size must be positive")
+    for i in range(0, len(items), size):
+        yield list(items[i : i + size])
 
 
 @app.command(name="check-data")
@@ -264,10 +271,40 @@ def forecast(
             raise typer.BadParameter(f"Invalid snapshot time: {snapshot}") from exc
         snapshot_times.append(parsed)
 
+    active_windows_cfg = forecast_cfg.get("active_windows", [])
+    active_windows: list[tuple[time, time]] = []
+    for window in active_windows_cfg:
+        try:
+            start_str = window["start"]
+            end_str = window["end"]
+        except (KeyError, TypeError) as exc:  # pragma: no cover - config error
+            raise typer.BadParameter("active_windows entries must include start/end") from exc
+        try:
+            start_time = datetime.strptime(str(start_str), "%H:%M").time()
+            end_time = datetime.strptime(str(end_str), "%H:%M").time()
+        except ValueError as exc:  # pragma: no cover - config error
+            raise typer.BadParameter(f"Invalid active window: {window}") from exc
+        if end_time <= start_time:
+            raise typer.BadParameter("active window end must be after start")
+        active_windows.append((start_time, end_time))
+
+    max_snapshots_per_day = forecast_cfg.get("max_snapshots_per_day")
+    if max_snapshots_per_day is not None:
+        max_snapshots_per_day = int(max_snapshots_per_day)
+    max_snapshots_total = forecast_cfg.get("max_snapshots_total")
+    if max_snapshots_total is not None:
+        max_snapshots_total = int(max_snapshots_total)
+
     trade_dates = sorted(features["timestamp_et"].dt.date.unique())
     holidays = get_trading_holidays(years=sorted(list(set(d.year for d in trade_dates))))
     scheduler = ForecastScheduler(
-        dates=trade_dates, snapshots=snapshot_times, tz=zone, holidays=holidays
+        dates=trade_dates,
+        snapshots=snapshot_times,
+        tz=zone,
+        holidays=holidays,
+        active_windows=active_windows,
+        max_snapshots_per_day=max_snapshots_per_day,
+        max_total_snapshots=max_snapshots_total,
     )
     snapshots = scheduler.generate_snapshots()
 
@@ -284,6 +321,9 @@ def forecast(
         raise typer.BadParameter("No symbols available for forecasting")
 
     results: list[pd.DataFrame] = []
+    max_batch_size_raw = int(forecast_cfg.get("max_batch_size", 0))
+    max_batch_size = max_batch_size_raw if max_batch_size_raw > 0 else len(expected_symbols)
+    max_batch_size = max(max_batch_size, 1)
 
     for snapshot_local in snapshots:
         snapshot_utc = pd.Timestamp(snapshot_local).tz_convert("UTC")
@@ -293,19 +333,28 @@ def forecast(
         latest = history.groupby("unique_id")["ds"].max()
         if not (latest == snapshot_utc).all():
             continue
-        future = build_x_df_for_horizon(features, snapshot_utc, horizon)
-        forecast_df = client.forecast(
-            history,
-            future,
-            snapshot_ts=snapshot_utc,
-            horizon=horizon,
-            freq=freq,
-            quantiles=quantiles,
-        )
-        if forecast_df.empty:
-            raise typer.Exit(code=1)
-        forecast_df["snapshot_utc"] = snapshot_utc
-        results.append(forecast_df)
+        available_ids = sorted(str(uid) for uid in latest.index)
+
+        for chunk_ids in _iter_chunks(available_ids, max_batch_size):
+            history_chunk = history[history["unique_id"].isin(chunk_ids)].copy()
+            future_chunk = build_x_df_for_horizon(
+                features,
+                snapshot_utc,
+                horizon,
+                symbols=chunk_ids,
+            )
+            forecast_df = client.forecast(
+                history_chunk,
+                future_chunk,
+                snapshot_ts=snapshot_utc,
+                horizon=horizon,
+                freq=freq,
+                quantiles=quantiles,
+            )
+            if forecast_df.empty:
+                raise typer.Exit(code=1)
+            forecast_df["snapshot_utc"] = snapshot_utc
+            results.append(forecast_df)
 
     if not results:
         raise typer.Exit(code=1)

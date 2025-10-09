@@ -99,3 +99,25 @@ def test_get_trading_holidays() -> None:
     assert date(2024, 1, 1) in holidays
     assert date(2024, 7, 4) in holidays
     assert date(2024, 12, 25) in holidays
+
+
+def test_scheduler_active_windows_and_quota() -> None:
+    """Scheduler should respect active windows and snapshot quotas."""
+    dates = [date(2024, 7, 1), date(2024, 7, 2)]
+    snapshots = [time(9, 30), time(10, 0), time(15, 0), time(16, 0)]
+    scheduler = ForecastScheduler(
+        dates=dates,
+        snapshots=snapshots,
+        tz="America/New_York",
+        holidays=[],
+        active_windows=[(time(9, 45), time(15, 30))],
+        max_snapshots_per_day=2,
+        max_total_snapshots=3,
+    )
+    generated = scheduler.generate_snapshots()
+
+    assert len(generated) == 3
+    assert all(time(9, 45) <= snap.time() <= time(15, 30) for snap in generated)
+    assert generated[0].date() == date(2024, 7, 1)
+    assert generated[1].date() == date(2024, 7, 1)
+    assert generated[2].date() == date(2024, 7, 2)

@@ -1,4 +1,10 @@
 snapshots_et: ["10:00", "14:30"]
+active_windows:
+  - start: "09:45"
+    end: "15:30"
+max_snapshots_per_day: 2
+max_snapshots_total: null
+max_batch_size: 100
 horizon_min: 15
 freq: "min"
 quantiles: [0.25, 0.5, 0.75]
