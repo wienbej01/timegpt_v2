@@ -209,7 +209,12 @@ class BacktestSimulator:
         price_map: dict[str, pd.Series] = {}
         for symbol, group in working.groupby("symbol", sort=False):
             symbol_str = cast(str, symbol)
-            series = group.set_index("timestamp").sort_index()["close"].astype(float)
+            series = (
+                group.sort_values("timestamp")
+                .groupby("timestamp", sort=True)["close"]
+                .mean()
+                .astype(float)
+            )
             price_map[symbol_str] = cast(pd.Series, series)
         return price_map
 

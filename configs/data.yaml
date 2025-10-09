@@ -1,3 +1,3 @@
 gcs:
-  bucket: jwss_data_store
-  template: "stocks/{ticker}/{yyyy}/{ticker}_{yyyy_mm}.parquet"
+  bucket: /home/jacobw/gcs-mount/bronze
+  template: "stocks/1m/{ticker}/{yyyy}/{ticker}_{yyyy_dash_mm}.parquet"

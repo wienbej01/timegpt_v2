@@ -56,7 +56,9 @@ class GCSReader:
         relative_path = self._config.template.format(
             ticker=ticker,
             yyyy=str(year),
+            mm=f"{month:02d}",
             yyyy_mm=f"{year}_{month:02d}",
+            yyyy_dash_mm=f"{year}-{month:02d}",
         )
         full_path = self._join_path(relative_path)
         with self._fs.open(full_path) as fh:
@@ -119,11 +121,17 @@ class GCSReader:
             renamed["symbol"] = renamed["symbol"].fillna(ticker_str).astype(str)
         else:
             renamed["symbol"] = ticker_str
-        renamed["timestamp"] = pd.to_datetime(renamed["timestamp"], utc=False, errors="raise")
-        if renamed["timestamp"].dt.tz is None:
-            renamed["timestamp"] = renamed["timestamp"].dt.tz_localize(ET_ZONE)
+        timestamps = renamed["timestamp"]
+        if pd.api.types.is_numeric_dtype(timestamps):
+            converted = pd.to_datetime(timestamps, unit="ms", utc=True)
+            renamed["timestamp"] = converted.dt.tz_convert(ET_ZONE)
         else:
-            renamed["timestamp"] = renamed["timestamp"].dt.tz_convert(ET_ZONE)
+            converted = pd.to_datetime(timestamps, utc=False, errors="raise")
+            if converted.dt.tz is None:
+                converted = converted.dt.tz_localize(ET_ZONE)
+            else:
+                converted = converted.dt.tz_convert(ET_ZONE)
+            renamed["timestamp"] = converted
         renamed = _filter_rth(renamed)
         renamed = renamed.sort_values("timestamp").reset_index(drop=True)
         return renamed

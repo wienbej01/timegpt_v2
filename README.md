@@ -41,3 +41,15 @@
 - `docs/` contains deeper design notes on data quality, feature engineering, forecasting, trading, and evaluation.
 - The `Makefile` mirrors the automation used in CI; running `make fmt && make lint && make test`
   before commits keeps the project reproducible.
+
+## Accessing GCS Data (local mount)
+
+For the pilot run we mapped the production bucket `gs://jwss_data_store` into the workspace via the
+local mount `~/gcs-mount/`. The `check-data` command reads the bronze layer by default using:
+
+- Bucket path: `~/gcs-mount/bronze`
+- Template: `stocks/1m/{ticker}/{yyyy}/{ticker}_{yyyy-mm}.parquet`
+
+If your mount or tier differs, adjust `configs/data.yaml` accordingly. The loader uses column aliasing
+so raw parquet schemas with `t/o/h/l/c/v` are normalized automatically; only real-time (`session=regular`)
+bars between 09:30–16:00 ET are kept.

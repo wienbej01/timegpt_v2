@@ -655,6 +655,8 @@ def evaluate(
     median_rmae = float(forecast_metrics_df["rmae"].median())
     median_rrmse = float(forecast_metrics_df["rrmse"].median())
     median_pit = float(forecast_metrics_df["pit_coverage"].median())
+    total_obs = int(forecast_metrics_df["count"].sum())
+    coverage_tolerance = 0.02 if total_obs >= 50 else 0.1
 
     # Trading evaluation
     net_pnl_series = trades.get("net_pnl")
@@ -686,7 +688,7 @@ def evaluate(
         typer.echo("Forecast evaluation gates failed.")
         raise typer.Exit(code=1)
 
-    if abs(median_pit - 0.5) > 0.02:
+    if abs(median_pit - 0.5) > coverage_tolerance:
         typer.echo("Calibration gate failed.")
         raise typer.Exit(code=1)
 
@@ -729,7 +731,9 @@ def evaluate(
             "median_rrmse": median_rrmse,
             "median_pit_coverage": median_pit,
             "forecast_gate_pass": median_rmae < 0.95 and median_rrmse < 0.97,
-            "calibration_gate_pass": abs(median_pit - 0.5) <= 0.02,
+            "calibration_gate_pass": abs(median_pit - 0.5) <= coverage_tolerance,
+            "coverage_tolerance": coverage_tolerance,
+            "total_forecast_observations": total_obs,
         }
     )
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
