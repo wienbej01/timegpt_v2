@@ -43,7 +43,7 @@ def test_long_entry_signal(trading_rules: TradingRules, rule_params: RuleParams)
         tick_size=0.01,
         symbol="AAPL",
     )
-    assert signal == 1
+    assert 0 < signal <= 1
 
 
 def test_short_entry_signal(trading_rules: TradingRules, rule_params: RuleParams) -> None:
@@ -58,7 +58,7 @@ def test_short_entry_signal(trading_rules: TradingRules, rule_params: RuleParams
         tick_size=0.01,
         symbol="AAPL",
     )
-    assert signal == -1
+    assert -1 <= signal < 0
 
 
 def test_no_entry_signal(trading_rules: TradingRules, rule_params: RuleParams) -> None:
@@ -74,6 +74,34 @@ def test_no_entry_signal(trading_rules: TradingRules, rule_params: RuleParams) -
         symbol="AAPL",
     )
     assert signal == 0
+
+
+def test_position_size_scales_with_uncertainty(
+    trading_rules: TradingRules, rule_params: RuleParams
+) -> None:
+    """Position size should scale with distance from midpoint."""
+    small_move = trading_rules.get_entry_signal(
+        rule_params,
+        q25=100.2,
+        q50=100.3,
+        q75=100.4,
+        last_price=100.0,
+        sigma_5m=0.5,
+        tick_size=0.01,
+        symbol="AAPL",
+    )
+    large_move = trading_rules.get_entry_signal(
+        rule_params,
+        q25=103.0,
+        q50=104.0,
+        q75=105.0,
+        last_price=100.0,
+        sigma_5m=1.0,
+        tick_size=0.01,
+        symbol="AAPL",
+    )
+
+    assert 0 < small_move < large_move <= 1
 
 
 def test_long_exit_signal_take_profit(trading_rules: TradingRules, rule_params: RuleParams) -> None:

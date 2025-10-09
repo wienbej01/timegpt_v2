@@ -13,11 +13,10 @@ A long position is entered if the following conditions are met:
 *   The 25th percentile of the forecast (`q25`) is greater than the last price plus the trading costs in basis points.
 *   The absolute difference between the 50th percentile of the forecast (`q50`) and the last price is greater than or equal to a configurable multiple (`k_sigma`) of the 5-minute volatility (`sigma_5m`).
 
-```
-q25 > last_price + costs_bp
-AND
-|q50 - last_price| >= k_sigma * sigma_5m
-```
+When both checks pass the position size is proportional to the strength of the signal. We scale by
+the z-score of the median forecast (`|q50-last_price| / sigma_5m`) and clip the absolute size to
+`[0, 1]` so that shallow dislocations trade smaller than pronounced ones but the strategy never
+exceeds a single unit of exposure.
 
 ### Short Entry
 
@@ -26,11 +25,7 @@ A short position is entered if the following conditions are met:
 *   The 75th percentile of the forecast (`q75`) is less than the last price minus the trading costs in basis points.
 *   The absolute difference between the 50th percentile of the forecast (`q50`) and the last price is greater than or equal to a configurable multiple (`k_sigma`) of the 5-minute volatility (`sigma_5m`).
 
-```
-q75 < last_price - costs_bp
-AND
-|q50 - last_price| >= k_sigma * sigma_5m
-```
+The same sizing logic applies, with the sign flipped for shorts.
 
 ## Exit Rules
 
@@ -58,6 +53,10 @@ All open positions are closed at a configurable time of day (`time_stop`), which
 
 The sizing of positions is determined by the following rules:
 
-*   **Uncertainty-scaled:** The size of a position can be scaled based on the uncertainty of the forecast (e.g., the difference between `q75` and `q25`).
-*   **Max open per symbol:** A maximum of one open position is allowed per symbol at any given time.
-*   **Daily trade cap:** A maximum number of trades are allowed per day.
+*   **Uncertainty-scaled:** The magnitude of each trade is `clip(|q50-last_price| / sigma_5m, 0, 1)`,
+    meaning that barely significant moves risk less capital while large dislocations reach the full
+    unit size.
+*   **Max open per symbol:** The simulator instantiates one rule engine per parameter set and never
+    opens more than `max_open_per_symbol` positions per symbol simultaneously.
+*   **Daily trade cap:** `daily_trade_cap` enforces a per-symbol limit on new entries each trading
+    day to keep turnover bounded.

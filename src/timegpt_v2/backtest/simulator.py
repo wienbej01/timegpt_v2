@@ -37,7 +37,7 @@ class Trade:
     exit_ts: pd.Timestamp
     entry_price: float
     exit_price: float
-    position: int
+    position: float
     costs_bp: float
 
     def gross_pnl(self) -> float:
@@ -219,7 +219,7 @@ class BacktestSimulator:
         symbol: str,
         entry_ts: pd.Timestamp,
         entry_price: float,
-        position: int,
+        position: float,
         price_series: pd.Series,
         sigma_map: dict[tuple[str, pd.Timestamp], float],
     ) -> tuple[pd.Timestamp, float]:

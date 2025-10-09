@@ -34,24 +34,32 @@ class TradingRules:
         sigma_5m: float,
         tick_size: float,
         symbol: str,
-    ) -> int:
+    ) -> float:
         """Get the entry signal."""
         costs_bps = self.costs.get_costs_bps(symbol, tick_size, last_price)
         costs_abs = (costs_bps / 10_000) * last_price
 
-        threshold = params.k_sigma * sigma_5m
-        if q25 > last_price + costs_abs and abs(q50 - last_price) >= threshold:
-            return 1  # Long
-        if q75 < last_price - costs_abs and abs(q50 - last_price) >= threshold:
-            return -1  # Short
-        return 0  # No signal
+        base_sigma = max(sigma_5m, 1e-9)
+        distance = abs(q50 - last_price)
+        threshold = params.k_sigma * base_sigma
+        if distance < threshold:
+            return 0.0  # Threshold not met
+
+        raw_size = distance / base_sigma
+        size = float(max(0.0, min(raw_size, 1.0)))
+
+        if q25 > last_price + costs_abs:
+            return size
+        if q75 < last_price - costs_abs:
+            return -size
+        return 0.0  # No signal
 
     def get_exit_signal(
         self,
         params: RuleParams,
         entry_price: float,
         current_price: float,
-        position: int,
+        position: float,
         sigma_5m: float,
         current_time: time,
     ) -> bool:
