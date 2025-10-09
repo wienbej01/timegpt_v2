@@ -12,6 +12,7 @@ import pandas as pd
 import typer
 import yaml
 
+from timegpt_v2.backtest.grid import GridSearch
 from timegpt_v2.fe.base_features import build_feature_matrix
 from timegpt_v2.fe.context import FeatureContext
 from timegpt_v2.forecast.scheduler import ForecastScheduler, get_trading_holidays
@@ -367,7 +368,35 @@ def sweep(
     grid_config: Path | None = GRID_CONFIG_OPTION,
 ) -> None:
     """Execute trading parameter sweep."""
-    typer.echo(f"sweep stub: run_id={run_id}, config_dir={config_dir}, grid={grid_config}")
+    run_dir = Path("artifacts") / "runs" / run_id
+    forecasts_path = run_dir / "forecasts" / "quantiles.csv"
+    features_path = run_dir / "features" / "features.parquet"
+    prices_path = run_dir / "validation" / "clean.parquet"  # Use clean data as prices
+    output_dir = run_dir / "eval" / "grid"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not forecasts_path.exists():
+        raise typer.BadParameter("Forecasts not found. Run `forecast` first.")
+    if not features_path.exists():
+        raise typer.BadParameter("Features not found. Run `build-features` first.")
+    if not prices_path.exists():
+        raise typer.BadParameter("Prices not found. Run `check-data` first.")
+
+    forecasts = pd.read_csv(forecasts_path)
+    features = pd.read_parquet(features_path)
+    prices = pd.read_parquet(prices_path)
+
+    trading_cfg_path = grid_config or config_dir / "trading.yaml"
+    trading_cfg = _load_yaml(trading_cfg_path)
+
+    logger = _configure_logger(run_dir / "logs" / "sweep.log")
+    grid_search = GridSearch(trading_cfg=trading_cfg, logger=logger)
+    results = grid_search.run(forecasts, features, prices)
+
+    output_path = output_dir / "summary.csv"
+    results.to_csv(output_path, index=False)
+
+    typer.echo(f"Grid search results written to {output_path}")
 
 
 @app.command()
