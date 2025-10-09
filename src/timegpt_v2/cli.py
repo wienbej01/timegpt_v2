@@ -728,6 +728,8 @@ def evaluate(
             "median_rmae": median_rmae,
             "median_rrmse": median_rrmse,
             "median_pit_coverage": median_pit,
+            "forecast_gate_pass": median_rmae < 0.95 and median_rrmse < 0.97,
+            "calibration_gate_pass": abs(median_pit - 0.5) <= 0.02,
         }
     )
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -742,7 +744,7 @@ def report(
 ) -> None:
     """Assemble final report for the run."""
     run_dir = Path("artifacts") / "runs" / run_id
-    report_path = build_report(run_dir)
+    report_path = build_report(run_dir, config_dir=config_dir)
 
     meta_path = run_dir / "meta.json"
     if meta_path.exists():
