@@ -169,10 +169,11 @@ def check_data(
     gcs_cfg = _expect_mapping("data.gcs", data_cfg.get("gcs"))
     bucket = str(gcs_cfg.get("bucket", ""))
     template = str(gcs_cfg.get("template", ""))
+    skip_ts_norm = bool(gcs_cfg.get("skip_timestamp_normalization", False))
     if not template:
         raise typer.BadParameter("configs/data.yaml must define gcs.template")
 
-    reader = GCSReader(ReaderConfig(bucket=bucket, template=template))
+    reader = GCSReader(ReaderConfig(bucket=bucket, template=template, skip_timestamp_normalization=skip_ts_norm))
 
     raw_frame = reader.read_universe(tickers, start_date, end_date)
     checker = DataQualityChecker(policy=DataQualityPolicy.from_dict(policy_cfg))
@@ -723,6 +724,10 @@ def backtest(
     portfolio_summary.to_csv(portfolio_path, index=False)
     symbol_summary.to_csv(per_symbol_path, index=False)
 
+    # Check if summary_df has data before accessing iloc[0]
+    if summary_df.empty:
+        raise typer.BadParameter("Backtest produced no summary statistics.")
+
     meta_path = run_dir / "meta.json"
     if meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -747,7 +752,7 @@ def backtest(
             "ts": datetime.utcnow().isoformat() + "Z",
             "event": "backtest",
             "run_id": run_id,
-            "trade_count": int(summary_df.iloc[0]["trade_count"]),
+            "trade_count": int(summary_df.iloc[0]["trade_count"]) if not summary_df.empty else 0,
         },
     )
 
@@ -948,7 +953,10 @@ def evaluate(
         raise typer.Exit(code=1)
 
     c15 = cost_table.loc[(cost_table["cost_multiplier"] - 1.5).abs() < 1e-6]
-    if c15.empty or c15.iloc[0]["total_net_pnl"] < 0.0:
+    if c15.empty:
+        typer.echo("Cost sensitivity gate failed: no 1.5× cost scenario found.")
+        raise typer.Exit(code=1)
+    if len(c15) == 0 or c15.iloc[0]["total_net_pnl"] < 0.0:
         typer.echo("Cost sensitivity gate failed at 1.5× costs.")
         raise typer.Exit(code=1)
 

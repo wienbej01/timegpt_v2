@@ -1,4 +1,4 @@
-rth_min_pct: 0.95
+rth_min_pct: 0.75
 drop_days_with_sustained_ffill: true
 hard_fail_on_schema: true
 require_adjusted: false

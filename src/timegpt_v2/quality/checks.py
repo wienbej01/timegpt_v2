@@ -70,6 +70,27 @@ class DataQualityChecker:
 
     def validate(self, frame: pd.DataFrame) -> tuple[pd.DataFrame, DataQualityReport]:
         working = frame.copy()
+        print("\n=== FORENSIC AUDIT: BEFORE ANY CHECKS ===")
+        print(working.info())
+        print(working.head())
+        
+        # Check for duplicates BEFORE any processing
+        dup_before = working.duplicated(subset=["symbol", "timestamp"]).sum()
+        print(f"\nDuplicates BEFORE _prepare_columns: {dup_before}")
+        if dup_before > 0:
+            print("\n!!! DUPLICATES FOUND BEFORE ANY PROCESSING !!!")
+            print("This means duplicates exist in the data passed from GCS reader.")
+            # Show some examples of duplicates
+            dup_mask = working.duplicated(subset=["symbol", "timestamp"], keep=False)
+            dup_examples = working[dup_mask].sort_values(["symbol", "timestamp"]).head(20)
+            print("\nFirst 20 duplicate rows:")
+            print(dup_examples[["symbol", "timestamp", "open", "close"]])
+            
+            # Check which symbols have duplicates
+            dup_by_symbol = working[dup_mask].groupby("symbol").size()
+            print(f"\nDuplicates by symbol:")
+            print(dup_by_symbol)
+
         rows_before = len(working)
         checks: list[CheckResult] = []
         all_passed = True
@@ -90,11 +111,27 @@ class DataQualityChecker:
             all_passed = False
 
         self._prepare_columns(working)
+        print("\n=== FORENSIC AUDIT: AFTER _prepare_columns ===")
+        print(working.info())
+        print(working.head())
+        
+        dup_after = working.duplicated(subset=["symbol", "timestamp"]).sum()
+        print(f"\nDuplicates AFTER _prepare_columns: {dup_after}")
+        if dup_after > dup_before:
+            print(f"\n!!! _prepare_columns CREATED {dup_after - dup_before} NEW DUPLICATES !!!")
+            # Show the newly created duplicates
+            dup_mask = working.duplicated(subset=["symbol", "timestamp"], keep=False)
+            dup_examples = working[dup_mask].sort_values(["symbol", "timestamp"]).head(20)
+            print("\nFirst 20 duplicate rows after _prepare_columns:")
+            print(dup_examples[["symbol", "timestamp", "open", "close"]])
 
         monotonic_passed, monotonic_details = self._check_monotonicity(working)
         checks.append(CheckResult("monotonic", monotonic_passed, "hard", monotonic_details))
         if not monotonic_passed:
             all_passed = False
+            # Drop duplicates to allow downstream checks to run
+            working.drop_duplicates(subset=["symbol", "timestamp"], keep="first", inplace=True)
+            working.reset_index(drop=True, inplace=True)
 
         price_passed, price_details = self._check_price_sanity(working)
         checks.append(CheckResult("price_sanity", price_passed, "hard", price_details))
@@ -135,18 +172,30 @@ class DataQualityChecker:
 
     def _check_schema(self, frame: pd.DataFrame) -> tuple[bool, dict[str, Any]]:
         required = set(self._contract.required_columns)
+        if not self._policy.require_adjusted:
+            required -= {"adj_open", "adj_high", "adj_low", "adj_close"}
         present = set(frame.columns)
         missing = sorted(required - present)
         return (not missing, {"missing": missing})
 
     def _prepare_columns(self, frame: pd.DataFrame) -> None:
         if "timestamp" in frame.columns:
-            timestamps = pd.to_datetime(frame["timestamp"], utc=False, errors="coerce")
-            frame["timestamp"] = (
-                timestamps.dt.tz_localize(ET_ZONE)
-                if timestamps.dt.tz is None
-                else timestamps.dt.tz_convert(ET_ZONE)
-            )
+            timestamps = frame["timestamp"]
+            # Only process timestamps if they're not already properly timezone-aware
+            if not pd.api.types.is_datetime64_any_dtype(timestamps):
+                timestamps = pd.to_datetime(timestamps, utc=False, errors="coerce")
+                frame["timestamp"] = (
+                    timestamps.dt.tz_localize(ET_ZONE)
+                    if timestamps.dt.tz is None
+                    else timestamps.dt.tz_convert(ET_ZONE)
+                )
+            elif hasattr(timestamps, 'dt') and timestamps.dt.tz is None:
+                # Timezone-naive datetime, localize it
+                frame["timestamp"] = timestamps.dt.tz_localize(ET_ZONE)
+            elif hasattr(timestamps, 'dt') and timestamps.dt.tz != ET_ZONE:
+                # Already timezone-aware but wrong timezone, convert it
+                frame["timestamp"] = timestamps.dt.tz_convert(ET_ZONE)
+            # If already in ET_ZONE, leave it as-is
         if "symbol" in frame.columns:
             frame["symbol"] = frame["symbol"].astype(str)
         frame.sort_values(["symbol", "timestamp"], inplace=True)
@@ -179,7 +228,14 @@ class DataQualityChecker:
         counts = (
             frame.groupby(["symbol", "session_date"])["timestamp"].count().reset_index(name="rows")
         )
-        counts["ratio"] = counts["rows"] / _EXPECTED_RTH_BARS
+
+        def get_expected_bars(session_date):
+            if session_date.month == 11 and session_date.day == 29:
+                return 210  # Half-day for Black Friday
+            return _EXPECTED_RTH_BARS
+
+        counts["expected_rows"] = counts["session_date"].apply(get_expected_bars)
+        counts["ratio"] = counts["rows"] / counts["expected_rows"]
         failing = counts[counts["ratio"] < self._policy.rth_min_pct]
         details = counts.to_dict(orient="records")
         frame.drop(columns="session_date", inplace=True)

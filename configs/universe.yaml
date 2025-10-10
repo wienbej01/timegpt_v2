@@ -1,8 +1,4 @@
-tickers: [AAPL, MSFT, NVDA]
-dates:
-  start: "2024-07-01"
-  end: "2024-08-31"
+tickers: [AAPL, MSFT, NVDA, TSLA, AMZN, GOOGL, META, NFLX, AMD, CRM]
+dates: { start: "2024-08-01", end: "2024-10-31" }
 tz: America/New_York
-rth:
-  open: "09:30"
-  close: "16:00"
+rth: { open: "09:30", close: "16:00" }
