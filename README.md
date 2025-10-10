@@ -30,17 +30,23 @@
    Generated artifacts (features, forecasts, trades, metrics, reports) land under
    `artifacts/runs/<run_id>/...` for inspection.
 
-4. **Explore parameter sweeps** using the trading grid:
+4. **Explore parameter sweeps** using the trading grid or forecast configuration sweeps:
 
    ```bash
+   # Trading parameter sweep (k_sigma, s_stop, s_take)
    python -m timegpt_v2.cli sweep --config-dir configs --run-id "$RUN_ID"
+
+   # Forecast configuration sweep (snapshot presets, horizons, quantiles, calibration)
+   make forecast-grid-plan  # dry-run plan
+   make forecast-grid       # execute with baseline reuse
    ```
 
 - Configuration files live in `configs/` and are the single source of truth for universe definitions,
-  scheduler windows, trading rules, and backtest aggregation settings.
-- `docs/` contains deeper design notes on data quality, feature engineering, forecasting, trading, and evaluation.
+  scheduler windows, trading rules, backtest aggregation, and forecast grid specifications.
+- `docs/` contains deeper design notes on data quality, feature engineering, forecasting, trading, evaluation, and system architecture.
 - The `Makefile` mirrors the automation used in CI; running `make fmt && make lint && make test`
   before commits keeps the project reproducible.
+- Forecast grid sweeps (Sprint 5) allow systematic exploration of snapshot presets, horizons, quantile sets, target scaling modes, and calibration methods via `configs/forecast_grid.yaml`.
 
 ## Accessing GCS Data (local mount)
 

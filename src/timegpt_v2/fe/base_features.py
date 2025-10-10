@@ -18,13 +18,16 @@ _LOG_EPS = 1e-12
 class FeaturePolicy:
     """Rolling windows and thresholds used across feature calculations."""
 
-    ret_windows: tuple[int, ...] = (1, 5, 15)
-    realized_variance_windows: tuple[int, ...] = (5, 15)
+    ret_windows: tuple[int, ...] = (1, 5, 15, 30)
+    realized_variance_windows: tuple[int, ...] = (5, 15, 30)
     atr_window: int = 5
     volatility_window: int = 30
     vwap_window: int = 30
+    vwap_trend_window: int = 5
     volume_window: int = 5
     volume_median_days: int = 20
+    volume_percentile_minutes: int = 390 * 20
+    signed_volume_window: int = 5
 
 
 _DEFAULT_POLICY = FeaturePolicy()
@@ -98,13 +101,22 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
     log_open = np.log(local["open"].clip(lower=_LOG_EPS))
 
     local["target_log_return_1m"] = log_close.shift(-1) - log_close
+    local["target_bp_ret_1m"] = local["target_log_return_1m"] * 10_000.0
 
     for window in policy.ret_windows:
         local[f"ret_{window}m"] = log_close.diff(window)
 
     minute_returns = log_close.diff()
+    vol_ewm = minute_returns.pow(2).ewm(span=60, adjust=False, min_periods=1).mean().pow(0.5)
+    local["vol_ewm_60m"] = vol_ewm
+    scale = vol_ewm.replace(0.0, np.nan)
+    scale_safe = scale.ffill().bfill().fillna(1.0)
+    local["target_z_ret_1m"] = local["target_log_return_1m"] / (scale_safe + _LOG_EPS)
     for window in policy.realized_variance_windows:
         local[f"rv_{window}m"] = minute_returns.pow(2).rolling(window=window, min_periods=1).sum()
+
+    local["ret_skew_15m"] = minute_returns.rolling(window=15, min_periods=5).skew().fillna(0.0)
+    local["ret_kurt_15m"] = minute_returns.rolling(window=15, min_periods=5).kurt().fillna(3.0)
 
     true_range = _true_range(local["high"], local["low"], log_close)
     local[f"atr_{policy.atr_window}m"] = true_range.rolling(
@@ -134,6 +146,9 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
     rolling_std = local["close"].rolling(window=policy.vwap_window, min_periods=5).std()
     local["z_close_vwap_30m"] = (local["close"] - local["vwap_30m"]) / (rolling_std + _LOG_EPS)
 
+    trend_window = max(policy.vwap_trend_window, 1)
+    local[f"vwap_trend_{trend_window}m"] = local["vwap_30m"] - local["vwap_30m"].shift(trend_window)
+
     volume_5m = local["volume"].rolling(window=policy.volume_window, min_periods=1).sum()
     days_window = policy.volume_median_days * 390 // policy.volume_window
     median_volume = volume_5m.rolling(
@@ -141,12 +156,35 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
     ).median()
     local["vol_5m_norm"] = volume_5m / (median_volume.replace(0, np.nan) + _LOG_EPS)
 
+    vol_percentile_window = max(policy.volume_percentile_minutes, policy.volume_window)
+    rolling_vol_max = (
+        local["volume"]
+        .rolling(window=vol_percentile_window, min_periods=1)
+        .max()
+        .replace(0, np.nan)
+    )
+    local["volume_percentile_20d"] = (
+        (local["volume"] / (rolling_vol_max + _LOG_EPS)).clip(upper=1.0).fillna(0.0)
+    )
+
+    close_safe = local["close"].replace(0, np.nan)
+    local["range_pct"] = ((local["high"] - local["low"]) / (close_safe + _LOG_EPS)).fillna(0.0)
+
+    price_diff = local["close"].diff().fillna(0.0)
+    direction = price_diff.apply(np.sign)
+    signed_volume = direction * local["volume"].astype(float)
+    local[f"signed_volume_{policy.signed_volume_window}m"] = signed_volume.rolling(
+        window=policy.signed_volume_window, min_periods=1
+    ).sum()
+
     local.reset_index(inplace=True)
     local["label_timestamp"] = local["timestamp"].shift(-1)
     feature_cols = [
         "timestamp",
         "symbol",
         "target_log_return_1m",
+        "target_bp_ret_1m",
+        "target_z_ret_1m",
         "label_timestamp",
     ]
     feature_cols.extend(
@@ -184,13 +222,15 @@ def _drop_sparse_rows(features: pd.DataFrame) -> pd.DataFrame:
             "symbol",
             "label_timestamp",
             "target_log_return_1m",
+            "target_bp_ret_1m",
+            "target_z_ret_1m",
         }
     ]
     if not feature_columns:
         return features
     data = features.copy()
     row_nan_share = data[feature_columns].isna().mean(axis=1)
-    filtered = data.loc[row_nan_share <= 0.01].copy()
+    filtered = data.loc[row_nan_share <= 0.1].copy()
     if filtered.empty:
         return filtered
 

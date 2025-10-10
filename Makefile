@@ -1,4 +1,4 @@
-.PHONY: install lint fmt test test-cov run report sweep
+.PHONY: install lint fmt test test-cov run report sweep forecast-grid forecast-grid-plan
 
 install: ## install package + dev
 	pip install -e .[dev]
@@ -27,3 +27,19 @@ report:
 
 sweep:
 	python -m timegpt_v2.cli sweep --run-id dev --config-dir configs
+
+forecast-grid:
+	python -m timegpt_v2.cli sweep \
+		--run-id dev_fg \
+		--config-dir configs \
+		--forecast-grid configs/forecast_grid.yaml \
+		--execute \
+		--reuse-baseline \
+		--baseline-run dev
+
+forecast-grid-plan:
+	python -m timegpt_v2.cli sweep \
+		--run-id dev_fg \
+		--config-dir configs \
+		--forecast-grid configs/forecast_grid.yaml \
+		--plan-only

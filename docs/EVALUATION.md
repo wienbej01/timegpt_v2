@@ -17,7 +17,16 @@ Sprint 6 introduced a full intraday backtester and sweep workflow:
   guaranteeing deterministic outputs for each grid point.
 - The CLI `timegpt_v2.cli sweep` command loads forecasts, features, and validated price bars, then
   generates a ranked summary table while persisting the per-grid folders. Distinct (k, s) settings
-  therefore produce distinct statistics, fixing the historical “identical stats” bug.
+  therefore produce distinct statistics, fixing the historical "identical stats" bug.
+
+Sprint 5 added forecast configuration sweeps:
+
+- `timegpt_v2.forecast.sweep.ForecastGridSearch` explores snapshot presets, horizons, quantile sets,
+  target scaling modes, and calibration methods. Each combo materialises an isolated config directory
+  and optionally executes forecast/backtest/evaluate pipelines.
+- Composite scoring ranks runs via `Sharpe × (1 − |PIT − 0.5|)` and writes `eval/grid/forecast_grid/scoreboard.csv`.
+- Make targets `forecast-grid-plan` and `forecast-grid` provide convenient automation; `--reuse-baseline`
+  reuses feature/validation artefacts to avoid redundant regeneration.
 
 This layout enables reproducible parameter studies while keeping single-run artifacts lightweight
 and auditable.

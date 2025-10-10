@@ -3,7 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from timegpt_v2.eval.metrics_forecast import pinball_loss, pit_coverage
+from timegpt_v2.eval.metrics_forecast import (
+    interval_width_stats,
+    pinball_loss,
+    pit_coverage,
+)
 
 
 @pytest.fixture
@@ -65,3 +69,11 @@ def test_pit_coverage_on_synthetic_data() -> None:
     q75 = y_true + 0.5
     coverage = pit_coverage(y_true, q25, q75)
     assert coverage == 0.0
+
+
+def test_interval_width_stats(q25: np.ndarray, q75: np.ndarray) -> None:
+    """Ensure interval width stats compute mean and median correctly."""
+    mean_width, median_width = interval_width_stats(q25, q75)
+    expected_widths = q75 - q25
+    assert mean_width == pytest.approx(expected_widths.mean())
+    assert median_width == pytest.approx(np.median(expected_widths))

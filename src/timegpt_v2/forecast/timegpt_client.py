@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time as _time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
@@ -38,6 +40,16 @@ class TimeGPTConfig:
     horizon: int = 15
     quantiles: tuple[float, ...] = (0.25, 0.5, 0.75)
     batch_multi_series: bool = True
+    model: str = "timegpt-1"  # "timegpt-1", "timegpt-1-long-horizon", or "auto"
+    levels: tuple[int, ...] = ()  # Optional confidence levels (e.g., 50, 80, 95)
+
+
+@dataclass(frozen=True)
+class TimeGPTRetryPolicy:
+    """Retry policy for the remote TimeGPT backend."""
+
+    max_attempts: int = 3
+    backoff_seconds: float = 2.0
 
 
 class _LocalDeterministicBackend:
@@ -67,6 +79,190 @@ class _LocalDeterministicBackend:
                 value = baseline + offset * spread
                 rows.append({"unique_id": unique_id, "quantile": float(q), "value": value})
         return pd.DataFrame(rows)
+
+
+class NixtlaTimeGPTBackend:
+    """Thin wrapper around Nixtla's TimeGPT SDK."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        retry: TimeGPTRetryPolicy | None = None,
+        timeout: float = 30.0,
+    ) -> None:
+        key_candidates = [
+            api_key,
+            os.environ.get("TIMEGPT_API_KEY"),
+            os.environ.get("NIXTLA_API_KEY"),
+        ]
+        resolved_key = next((candidate for candidate in key_candidates if candidate), None)
+        if not resolved_key:
+            raise ValueError(
+                "TimeGPT API key not provided. Set TIMEGPT_API_KEY environment variable or "
+                "pass api_key explicitly."
+            )
+        client_kwargs: dict[str, object] = {"api_key": resolved_key}
+        endpoint_candidates = [
+            base_url,
+            os.environ.get("TIMEGPT_ENDPOINT"),
+            os.environ.get("NIXTLA_BASE_URL"),
+        ]
+        endpoint = next((candidate for candidate in endpoint_candidates if candidate), None)
+        if endpoint:
+            client_kwargs["base_url"] = endpoint
+
+        try:
+            from nixtla import NixtlaClient  # type: ignore[assignment]
+
+            self._mode = "nixtla"
+            self._client = NixtlaClient(**client_kwargs)
+        except ImportError:
+            try:
+                from nixtlats import TimeGPT
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                raise RuntimeError(
+                    "Nixtla TimeGPT client not available. Install `nixtla` or `nixtlats`."
+                ) from exc
+            self._mode = "nixtlats"
+            self._client = TimeGPT(**client_kwargs)
+
+        self._retry = retry or TimeGPTRetryPolicy()
+        self._timeout = float(timeout)
+
+    def forecast(
+        self,
+        y: pd.DataFrame,
+        x: pd.DataFrame | None,
+        *,
+        h: int,
+        freq: str,
+        quantiles: Sequence[float],
+    ) -> pd.DataFrame:
+        attempts = 0
+        last_error: Exception | None = None
+        while attempts < self._retry.max_attempts:
+            attempts += 1
+            try:
+                response = self._call_client(
+                    y,
+                    x,
+                    h=h,
+                    freq=freq,
+                    quantiles=quantiles,
+                )
+                return self._normalize_response(response, quantiles)
+            except Exception as exc:  # pragma: no cover - network / SDK errors
+                last_error = exc
+                if attempts >= self._retry.max_attempts:
+                    raise
+                _time.sleep(self._retry.backoff_seconds * attempts)
+
+        if last_error is not None:  # pragma: no cover - defensive
+            raise last_error
+        return pd.DataFrame(columns=["unique_id", "quantile", "value"])
+
+    @staticmethod
+    def _find_column_for_quantile(row: pd.Series, quantile: float) -> str | None:
+        """Return the column name matching a quantile."""
+        candidates = [
+            f"q{int(round(quantile * 100))}",
+            f"q_{int(round(quantile * 100))}",
+            f"{quantile}",
+            f"{quantile:.2f}",
+            f"{quantile:.3f}",
+        ]
+        lower_candidates = [candidate.lower() for candidate in candidates]
+        for column in row.index:
+            column_lower = str(column).lower()
+            for token in lower_candidates:
+                if token in column_lower:
+                    return str(column)
+        return None
+
+    def _call_client(
+        self,
+        y: pd.DataFrame,
+        x: pd.DataFrame | None,
+        *,
+        h: int,
+        freq: str,
+        quantiles: Sequence[float],
+    ) -> pd.DataFrame:
+        kwargs = {
+            "h": h,
+            "freq": freq,
+            "quantiles": list(quantiles),
+        }
+        timeout = os.environ.get("TIMEGPT_TIMEOUT")
+        timeout_value = self._timeout
+        if timeout is not None:
+            try:
+                timeout_value = float(timeout)
+            except ValueError:
+                pass
+
+        if self._mode == "nixtla":
+            # nixtla.NixtlaClient signature uses `df` and `X_df`
+            return self._client.forecast(
+                df=y,
+                X_df=x,
+                timeout=timeout_value,
+                **kwargs,
+            )
+
+        # nixtlats.TimeGPT signature uses positional df and optional x_df
+        try:
+            return self._client.forecast(
+                y,
+                x_df=x,
+                timeout=timeout_value,
+                **kwargs,
+            )
+        except TypeError:
+            return self._client.forecast(
+                y,
+                X_df=x,
+                timeout=timeout_value,
+                **kwargs,
+            )
+
+    @staticmethod
+    def _normalize_response(
+        response: pd.DataFrame,
+        quantiles: Sequence[float],
+    ) -> pd.DataFrame:
+        if response.empty:
+            return pd.DataFrame(columns=["unique_id", "quantile", "value"])
+
+        working = response.copy()
+        if "unique_id" not in working.columns:
+            raise RuntimeError("TimeGPT response missing `unique_id` column.")
+
+        if "ds" in working.columns:
+            working.sort_values(["unique_id", "ds"], inplace=True)
+            last_rows = working.groupby("unique_id", as_index=False).tail(1)
+        else:
+            last_rows = working.drop_duplicates(subset=["unique_id"], keep="last")
+
+        records: list[dict[str, object]] = []
+        for _, row in last_rows.iterrows():
+            unique_id = str(row["unique_id"])
+            for quantile in quantiles:
+                column = NixtlaTimeGPTBackend._find_column_for_quantile(row, quantile)
+                if column is None:
+                    raise RuntimeError(
+                        f"TimeGPT response missing column for quantile {quantile:.3f}."
+                    )
+                records.append(
+                    {
+                        "unique_id": unique_id,
+                        "quantile": float(quantile),
+                        "value": float(row[column]),
+                    }
+                )
+        return pd.DataFrame(records)
 
 
 class TimeGPTClient:
@@ -235,4 +431,10 @@ class TimeGPTClient:
         return pd.DataFrame(columns=columns)
 
 
-__all__ = ["TimeGPTClient", "TimeGPTConfig", "TimeGPTBackend"]
+__all__ = [
+    "TimeGPTBackend",
+    "TimeGPTClient",
+    "TimeGPTConfig",
+    "TimeGPTRetryPolicy",
+    "NixtlaTimeGPTBackend",
+]

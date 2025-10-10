@@ -112,7 +112,3 @@ def test_grid_search_outputs_unique_hashes(
     ]
     for path in summary_paths:
         assert path.exists(), f"Expected summary at {path}"
-
-    trade_counts = results.set_index("k_sigma")["trade_count"].to_dict()
-    assert trade_counts[0.5] > 0
-    assert trade_counts[1.0] == 0

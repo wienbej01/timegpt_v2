@@ -333,81 +333,66 @@ tz: America/New_York
 
 ---
 
-## **Sprint 4 — Scheduler (Snapshots/Horizons) & Active Windows**
+## **Sprint 4 — Calibration & Richer TimeGPT Options** ✅ **COMPLETED**
 
-**Objective**: Control **when** we forecast; align to market windows & quotas.
+**Objective**: Tune the API call and correct residual bias with per-symbol affine/isotonic calibration.
 
 **Tasks**
 
-* `forecast/scheduler.py`:
-
-  * Generate snapshot timestamps per day: start with 2/day (10:00, 14:30), later 3–4/day.
-  * Skip pre/after-hours; skip non-trading days.
-  * Respect quotas: batch calls per snapshot across all symbols.
-* CLI `forecast` uses scheduler to iterate days×snapshots.
+* Extended quantiles & metadata: `forecast.yaml` supports presets (baseline, liquidity_profile) with custom snapshot times, horizons, and active windows. Forecast runs record the active preset, horizon, and skipped event dates in `meta.json`.
+* Event-aware scheduling: `skip_events` lists feature columns (e.g., `event_fomc`, `event_cpi`). If they fire, the scheduler drops that trading day. Skipped dates are tracked per run.
+* Target scaling: `TargetScaler` introduced; log/basis-point/z-scored targets round-tripped back to raw log returns before evaluation. Helper columns (target_bp_ret_1m, target_z_ret_1m, vol_ewm_60m) remain leakage-safe.
+* Forecast diagnostics: Evaluation writes `eval/forecast_diagnostics.csv`, capturing interval width stats alongside rMAE/rRMSE/PIT.
+* Feature enrichments: Additional OHLCV-derived signals (skew/kurtosis, VWAP trend, volume percentile, range %, signed volume) feed both the feature matrix and the future payload, giving TimeGPT more context.
+* Calibration layer: Per-symbol affine scaling and isotonic regression based on recent residuals; persisted in `models/calibration.json`.
+* Richer TimeGPT config: Expanded quantile sets `[0.1, 0.25, 0.5, 0.75, 0.9]`, optional levels `[50, 80, 95]`, model selection (`timegpt-1`, `timegpt-1-long-horizon`).
 
 **Tests**
 
-* `tests/test_scheduler.py`:
-
-  * Correct count of snapshots given dates & holidays.
-  * Skips off-limits windows.
-  * Produces deterministic list given seed.
+* `tests/test_scheduler.py`: Scheduler respects skip dates and event-aware exclusions.
+* `tests/test_target_scaling.py`: Scaling utilities ensure forward/inverse transform consistency.
+* `tests/test_calibration.py`: Calibration tests for invertibility and monotonicity.
 
 **Docs**
 
-* `docs/FORECASTING.md` “Snapshot policy”.
+* `docs/FORECASTING.md`: Updated with presets, scaling, diagnostics, and calibration process.
+* `docs/forecast_quality_plan.md`: Sprint 4 tasks marked complete.
 
 **Git**
 
-* Commit: `[S4] Snapshot scheduler + market windows`
+* Commit: `[S4] Calibration layer + richer TimeGPT options`
 * Push
 
 ---
 
-## **Sprint 5 — Trading Rules (Quantile-Aware) & Costs**
+## **Sprint 5 — Grid Search & Operationalisation** ✅ **COMPLETED**
 
-**Objective**: Turn quantiles into decisions; include costs & stops.
+**Objective**: Automate configuration exploration and harden operations with forecast grid sweeps.
 
 **Tasks**
 
-* `trading/rules.py`:
-
-  * **Entry long** if `q25 > last + costs_bp` AND `|q50−last| ≥ k·σ_5m`;
-    **Entry short** if `q75 < last − costs_bp` AND threshold passes.
-  * **Stops**: variance stop `s·σ_5m`; **Take-profit** `s_tp·σ_5m`; **Time stop** at 15:55 ET.
-  * **Sizing**: uncertainty-scaled (clip), `max 1` open/symbol, `daily_trade_cap`.
-* `trading/costs.py`: fee bps + half-spread tick; per-symbol tick config.
-
-**Configs**
-
-```yaml
-# configs/trading.yaml
-k_sigma: [0.5, 0.75, 1.0]
-s_stop: [1.0, 1.5, 2.0]
-s_take: [1.0]
-time_stop_et: "15:55"
-fees_bps: 0.5
-half_spread_ticks: { AAPL: 1, MSFT: 1, NVDA: 1 }
-max_open_per_symbol: 1
-daily_trade_cap: 3
-no_trade: { earnings: true, fomc: true, cpi: true, buffer_min: 10 }
-```
+* Extended grid runner to iterate over snapshot sets, horizons, target scaling, quantile configurations, and calibration toggles.
+* Built composite scoring (`score = Sharpe × (1 - PIT deviation)`) to rank runs.
+* Added weekly automation hooks (Make targets) to retrain/fine-tune with latest data and update calibration.
+* Forecast grid engine: `src/timegpt_v2/forecast/sweep.py` with `ForecastGridSpec` and `ForecastGridSearch` for cross-product sweeps.
+* Configuration schema: `configs/forecast_grid.yaml` defines sweep search space.
+* CLI extensions: `sweep` now accepts `--forecast-grid`, `--plan-only`, `--reuse-baseline`, `--baseline-run`.
+* Make targets: `make forecast-grid` and `make forecast-grid-plan` for execution and planning.
+* Documentation: Updated `docs/FORECASTING.md` with sweep workflow, gating metrics, automation via Make targets.
+* Technical docs: Created `SYSTEM_TECH_DOC.md` with system overview, module map, config schema, and change log.
 
 **Tests**
 
-* `tests/test_trading_rules.py`:
-
-  * No overlapping inventory; inventory in {−1,0,+1}.
-  * Cost application correct; take-profit/variance stop trigger as expected on synthetic paths.
+* `tests/test_forecast_sweep.py`: Validates grid spec cross-product, plan-only configs, metric aggregation, and scoreboard ranking.
 
 **Docs**
 
-* `docs/TRADING_RULES.md` with diagrams for entries/exits.
+* `docs/FORECASTING.md`: Added forecast configuration sweeps section.
+* `SYSTEM_TECH_DOC.md`: Comprehensive technical documentation.
 
 **Git**
 
-* Commit: `[S5] Quantile-aware rules + costs`
+* Commit: `[S5] Forecast grid sweeps + operational automation`
 * Push
 
 ---

@@ -9,6 +9,26 @@ import pandas as pd
 
 from timegpt_v2.fe import deterministic
 
+STATIC_FEATURE_COLUMNS = [
+    "ret_1m",
+    "ret_5m",
+    "ret_15m",
+    "ret_30m",
+    "rv_5m",
+    "rv_15m",
+    "rv_30m",
+    "ret_skew_15m",
+    "ret_kurt_15m",
+    "vol_parkinson_30m",
+    "vol_garman_klass_30m",
+    "vwap_30m",
+    "vwap_trend_5m",
+    "vol_5m_norm",
+    "volume_percentile_20d",
+    "range_pct",
+    "signed_volume_5m",
+]
+
 
 def build_y_df(
     features: pd.DataFrame,
@@ -75,6 +95,21 @@ def build_x_df_for_horizon(
         return pd.DataFrame()
 
     combined = pd.concat(future_frames, ignore_index=True)
+
+    static_columns = [col for col in STATIC_FEATURE_COLUMNS if col in features.columns]
+    if static_columns:
+        working = features.copy()
+        working["timestamp"] = pd.to_datetime(working["timestamp"], utc=True)
+        snapshot_rows = (
+            working.loc[
+                (working["timestamp"] == snapshot) & working["symbol"].isin(base_symbols),
+                ["symbol", *static_columns],
+            ]
+            .drop_duplicates(subset="symbol", keep="last")
+            .rename(columns={"symbol": "unique_id"})
+        )
+        combined = combined.merge(snapshot_rows, on="unique_id", how="left")
+
     ordered_cols = ["unique_id", "ds", "minute_ahead"] + [
         col for col in combined.columns if col not in {"unique_id", "ds", "minute_ahead"}
     ]

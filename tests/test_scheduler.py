@@ -121,3 +121,19 @@ def test_scheduler_active_windows_and_quota() -> None:
     assert generated[0].date() == date(2024, 7, 1)
     assert generated[1].date() == date(2024, 7, 1)
     assert generated[2].date() == date(2024, 7, 2)
+
+
+def test_scheduler_respects_skip_dates() -> None:
+    dates = [date(2024, 7, 1), date(2024, 7, 2), date(2024, 7, 3)]
+    snapshots = [time(10, 0)]
+    scheduler = ForecastScheduler(
+        dates=dates,
+        snapshots=snapshots,
+        tz="America/New_York",
+        holidays=[],
+        skip_dates=[date(2024, 7, 2)],
+    )
+    generated = scheduler.generate_snapshots()
+    generated_dates = {snap.date() for snap in generated}
+    assert date(2024, 7, 2) not in generated_dates
+    assert generated_dates == {date(2024, 7, 1), date(2024, 7, 3)}

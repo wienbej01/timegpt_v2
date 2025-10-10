@@ -1,16 +1,40 @@
-snapshots_et: ["10:00", "14:30"]
-active_windows:
-  - start: "09:45"
-    end: "15:30"
-max_snapshots_per_day: 2
+snapshot_preset: baseline
+snapshot_presets:
+  - name: baseline
+    times: ["10:00", "14:30"]
+    active_windows:
+      - start: "09:45"
+        end: "15:30"
+    max_snapshots_per_day: 2
+    horizon_min: 15
+  - name: liquidity_profile
+    times: ["09:45", "10:15", "12:00", "14:00", "15:15"]
+    active_windows:
+      - start: "09:40"
+        end: "15:45"
+    max_snapshots_per_day: 5
+    horizon_min: 15
 max_snapshots_total: null
 max_batch_size: 100
 horizon_min: 15
 freq: "min"
-quantiles: [0.25, 0.5, 0.75]
+quantiles: [0.1, 0.25, 0.5, 0.75, 0.9]
+levels: [50, 80, 95]
 batch_multi_series: true
 retry:
   max: 3
   backoff_sec: 2
 cache: true
 tz: America/New_York
+skip_events:
+  - event_fomc
+  - event_cpi
+target:
+  mode: log_return
+  volatility_column: vol_ewm_60m
+  bp_factor: 10000
+calibration:
+  method: affine
+  min_samples: 120
+  calibration_window_days: 30
+  model_path: models/calibration.json

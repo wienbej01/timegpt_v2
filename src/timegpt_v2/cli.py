@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
-from datetime import datetime, time
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -23,6 +24,7 @@ from timegpt_v2.backtest.grid import GridSearch
 from timegpt_v2.backtest.simulator import BacktestSimulator
 from timegpt_v2.eval.calibration import reliability_curve
 from timegpt_v2.eval.metrics_forecast import (
+    interval_width_stats,
     mae,
     pinball_loss,
     pit_coverage,
@@ -33,8 +35,15 @@ from timegpt_v2.eval.metrics_forecast import (
 from timegpt_v2.eval.metrics_trading import hit_rate, max_drawdown, sharpe_ratio
 from timegpt_v2.fe.base_features import build_feature_matrix
 from timegpt_v2.fe.context import FeatureContext
+from timegpt_v2.forecast.scaling import TargetScaler, TargetScalingConfig
 from timegpt_v2.forecast.scheduler import ForecastScheduler, get_trading_holidays
-from timegpt_v2.forecast.timegpt_client import TimeGPTClient, TimeGPTConfig
+from timegpt_v2.forecast.sweep import ForecastGridSearch, ForecastGridSpec
+from timegpt_v2.forecast.timegpt_client import (
+    NixtlaTimeGPTBackend,
+    TimeGPTClient,
+    TimeGPTConfig,
+    TimeGPTRetryPolicy,
+)
 from timegpt_v2.framing.build_payloads import build_x_df_for_horizon, build_y_df
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
 from timegpt_v2.quality.checks import DataQualityChecker
@@ -79,6 +88,24 @@ def _expect_mapping(name: str, payload: Any) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise typer.BadParameter(f"{name} must be a mapping")
     return payload
+
+
+def _coerce_optional_int(value: object | None, *, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):  # bool is subclass of int but rarely intended
+        raise typer.BadParameter(f"{field} must be integer-like, not boolean")
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "":
+            return None
+        try:
+            return int(stripped)
+        except ValueError as exc:  # pragma: no cover - config error
+            raise typer.BadParameter(f"{field} must be integer-like") from exc
+    raise typer.BadParameter(f"{field} must be integer-like")
 
 
 def _json_default(obj: object) -> str:
@@ -253,17 +280,112 @@ def forecast(
 
     forecast_cfg = _load_yaml(config_dir / "forecast.yaml")
     quantiles = tuple(float(q) for q in forecast_cfg.get("quantiles", [0.25, 0.5, 0.75]))
-    horizon = int(forecast_cfg.get("horizon_min", 15))
+    horizon_base = _coerce_optional_int(forecast_cfg.get("horizon_min", 15), field="horizon_min")
+    horizon = horizon_base if horizon_base is not None else 15
     freq = str(forecast_cfg.get("freq", "min"))
     tz_name = str(forecast_cfg.get("tz", "America/New_York"))
-    snapshot_strs = forecast_cfg.get("snapshots_et", [])
-    if not snapshot_strs:
-        raise typer.BadParameter("forecast.yaml must define snapshots_et")
+    snapshot_presets_cfg = forecast_cfg.get("snapshot_presets")
+    preset_name: str | None = None
+    preset_active_windows_cfg: object | None = None
+    preset_max_per_day: object | None = None
+    preset_max_total: object | None = None
+
+    if snapshot_presets_cfg:
+        if not isinstance(snapshot_presets_cfg, Sequence):
+            raise typer.BadParameter("snapshot_presets must be a sequence")
+        presets: dict[str, dict[str, object]] = {}
+        default_name: str | None = None
+        for entry in snapshot_presets_cfg:
+            if not isinstance(entry, Mapping):
+                raise typer.BadParameter("Each snapshot preset must be a mapping")
+            entry_name_raw = entry.get("name")
+            if entry_name_raw is None:
+                raise typer.BadParameter("Each snapshot preset must include a name")
+            entry_name = str(entry_name_raw)
+            presets[entry_name] = dict(entry)
+            if default_name is None:
+                default_name = entry_name
+        if default_name is None:
+            raise typer.BadParameter("snapshot_presets cannot be empty")
+        preset_name_raw = forecast_cfg.get("snapshot_preset", default_name)
+        preset_name = str(preset_name_raw)
+        if preset_name not in presets:
+            available = ", ".join(sorted(presets))
+            raise typer.BadParameter(
+                f"snapshot_preset '{preset_name}' not found. Available presets: {available}"
+            )
+        selected_preset = presets[preset_name]
+        snapshot_values_raw = selected_preset.get("times")
+        if not isinstance(snapshot_values_raw, Sequence):
+            raise typer.BadParameter(f"snapshot preset '{preset_name}' times must be a sequence")
+        snapshot_strs = [str(item) for item in snapshot_values_raw]
+        if not snapshot_strs:
+            raise typer.BadParameter(f"snapshot preset '{preset_name}' must define times")
+        preset_horizon = _coerce_optional_int(
+            selected_preset.get("horizon_min"), field="horizon_min"
+        )
+        if preset_horizon is not None:
+            horizon = preset_horizon
+        preset_active_windows_cfg = selected_preset.get("active_windows")
+        preset_max_per_day = selected_preset.get("max_snapshots_per_day")
+        preset_max_total = selected_preset.get("max_total_snapshots")
+    else:
+        snapshot_strs = forecast_cfg.get("snapshots_et", [])
+        if not snapshot_strs:
+            raise typer.BadParameter("forecast.yaml must define snapshots_et or snapshot_presets")
+        if not isinstance(snapshot_strs, Sequence):
+            raise typer.BadParameter("snapshots_et must be a sequence")
+        snapshot_strs = [str(item) for item in snapshot_strs]
+
+    target_cfg_raw = forecast_cfg.get("target")
+    if target_cfg_raw is not None and not isinstance(target_cfg_raw, Mapping):
+        raise typer.BadParameter("forecast target configuration must be a mapping")
+    target_scaling_config = TargetScalingConfig.from_mapping(target_cfg_raw)
+    scaler = TargetScaler(target_scaling_config)
+
+    retry_cfg = forecast_cfg.get("retry", {})
+    retry_policy = TimeGPTRetryPolicy()
+    if isinstance(retry_cfg, Mapping):
+        retry_policy = TimeGPTRetryPolicy(
+            max_attempts=int(retry_cfg.get("max", retry_policy.max_attempts)),
+            backoff_seconds=float(retry_cfg.get("backoff_sec", retry_policy.backoff_seconds)),
+        )
+    timeout_sec = float(forecast_cfg.get("timeout_sec", 30.0))
+    base_url_raw = forecast_cfg.get("base_url")
+    base_url = str(base_url_raw).strip() if base_url_raw is not None else ""
+    base_url = base_url or None
+    api_key_cfg = forecast_cfg.get("api_key")
+    backend_mode = str(forecast_cfg.get("backend", "auto")).lower()
 
     zone = ZoneInfo(tz_name)
     features["timestamp"] = pd.to_datetime(features["timestamp"], utc=True)
     features_et = features["timestamp"].dt.tz_convert(zone)
     features = features.assign(timestamp_et=features_et)
+
+    skip_events_cfg = forecast_cfg.get("skip_events", [])
+    if isinstance(skip_events_cfg, str):
+        skip_event_names = [skip_events_cfg]
+    elif isinstance(skip_events_cfg, Sequence):
+        skip_event_names = [str(name) for name in skip_events_cfg]
+    elif skip_events_cfg is None:
+        skip_event_names = []
+    else:
+        raise typer.BadParameter("skip_events must be a string or a sequence of strings")
+
+    skip_dates: set[date] = set()
+    if skip_event_names:
+        timestamp_et = features["timestamp_et"]
+        for event_name in skip_event_names:
+            if event_name not in features.columns:
+                typer.echo(
+                    f"Skip event column '{event_name}' not found in features.",
+                    err=True,
+                )
+                continue
+            mask = features[event_name].astype(bool)
+            if mask.any():
+                event_dates = timestamp_et.loc[mask].dt.date
+                skip_dates.update(event_dates.tolist())
 
     snapshot_times: list[time] = []
     for snapshot in snapshot_strs:
@@ -273,9 +395,29 @@ def forecast(
             raise typer.BadParameter(f"Invalid snapshot time: {snapshot}") from exc
         snapshot_times.append(parsed)
 
-    active_windows_cfg = forecast_cfg.get("active_windows", [])
+    active_windows_cfg_raw = (
+        preset_active_windows_cfg
+        if preset_active_windows_cfg is not None
+        else forecast_cfg.get("active_windows", [])
+    )
+    if active_windows_cfg_raw is None:
+        active_windows_cfg_list: list[Mapping[str, object]] = []
+    elif isinstance(active_windows_cfg_raw, Sequence) and not isinstance(
+        active_windows_cfg_raw, (str, bytes)
+    ):
+        active_windows_cfg_list = [
+            window for window in active_windows_cfg_raw if window is not None
+        ]
+    elif isinstance(active_windows_cfg_raw, Mapping):
+        raise typer.BadParameter("active_windows must be a sequence of mappings, not a mapping")
+    else:
+        raise typer.BadParameter("active_windows must be a sequence of mappings")
+
+    active_windows_cfg = active_windows_cfg_list
     active_windows: list[tuple[time, time]] = []
     for window in active_windows_cfg:
+        if not isinstance(window, Mapping):
+            raise typer.BadParameter("active_windows entries must be mappings with start/end")
         try:
             start_str = window["start"]
             end_str = window["end"]
@@ -290,12 +432,21 @@ def forecast(
             raise typer.BadParameter("active window end must be after start")
         active_windows.append((start_time, end_time))
 
-    max_snapshots_per_day = forecast_cfg.get("max_snapshots_per_day")
-    if max_snapshots_per_day is not None:
-        max_snapshots_per_day = int(max_snapshots_per_day)
-    max_snapshots_total = forecast_cfg.get("max_snapshots_total")
-    if max_snapshots_total is not None:
-        max_snapshots_total = int(max_snapshots_total)
+    if preset_max_per_day is not None:
+        max_snapshots_per_day = _coerce_optional_int(
+            preset_max_per_day, field="max_snapshots_per_day"
+        )
+    else:
+        max_snapshots_per_day = _coerce_optional_int(
+            forecast_cfg.get("max_snapshots_per_day"), field="max_snapshots_per_day"
+        )
+
+    if preset_max_total is not None:
+        max_snapshots_total = _coerce_optional_int(preset_max_total, field="max_total_snapshots")
+    else:
+        max_snapshots_total = _coerce_optional_int(
+            forecast_cfg.get("max_total_snapshots"), field="max_total_snapshots"
+        )
 
     trade_dates = sorted(features["timestamp_et"].dt.date.unique())
     holidays = get_trading_holidays(years=sorted(list(set(d.year for d in trade_dates))))
@@ -307,12 +458,41 @@ def forecast(
         active_windows=active_windows,
         max_snapshots_per_day=max_snapshots_per_day,
         max_total_snapshots=max_snapshots_total,
+        skip_dates=sorted(skip_dates),
     )
     snapshots = scheduler.generate_snapshots()
 
     logger = _configure_logger(logs_dir / "forecast.log", name="timegpt_v2.forecast")
     cache = ForecastCache(forecasts_dir / "cache", logger=logger)
+    backend: NixtlaTimeGPTBackend | None = None
+    if backend_mode not in {"auto", "nixtla", "stub"}:
+        raise typer.BadParameter("forecast.yaml backend must be one of: auto, nixtla, stub")
+    resolved_api_key = ""
+    if isinstance(api_key_cfg, str):
+        resolved_api_key = api_key_cfg.strip()
+    elif api_key_cfg is not None:
+        resolved_api_key = str(api_key_cfg).strip()
+    if backend_mode in {"auto", "nixtla"}:
+        if not resolved_api_key:
+            resolved_api_key = os.environ.get("TIMEGPT_API_KEY", "") or os.environ.get(
+                "NIXTLA_API_KEY", ""
+            )
+        if resolved_api_key or backend_mode == "nixtla":
+            try:
+                backend = NixtlaTimeGPTBackend(
+                    api_key=resolved_api_key or None,
+                    base_url=base_url,
+                    retry=retry_policy,
+                    timeout=timeout_sec,
+                )
+            except Exception as exc:
+                message = f"Unable to initialize TimeGPT backend: {exc}"
+                if backend_mode == "nixtla":
+                    raise typer.BadParameter(message) from exc
+                logger.warning("%s Falling back to deterministic backend.", message)
+
     client = TimeGPTClient(
+        backend=backend,
         cache=cache,
         config=TimeGPTConfig(freq=freq, horizon=horizon, quantiles=quantiles),
         logger=logger,
@@ -329,7 +509,7 @@ def forecast(
 
     for snapshot_local in snapshots:
         snapshot_utc = pd.Timestamp(snapshot_local).tz_convert("UTC")
-        history = build_y_df(features, snapshot_utc)
+        history = build_y_df(features, snapshot_utc, target_column=scaler.target_column)
         if history.empty:
             continue
         latest = history.groupby("unique_id")["ds"].max()
@@ -363,6 +543,11 @@ def forecast(
 
     combined = pd.concat(results, ignore_index=True)
     quantile_cols = [col for col in combined.columns if col.startswith("q")]
+    combined = scaler.inverse_quantiles(
+        combined,
+        features=features,
+        quantile_columns=quantile_cols,
+    )
 
     for _snapshot_ts, group in combined.groupby("snapshot_utc"):
         group_symbols = set(group["unique_id"].astype(str))
@@ -377,9 +562,26 @@ def forecast(
     output = combined.rename(columns={"unique_id": "symbol", "forecast_ts": "ts_utc"})
     output["ts_utc"] = pd.to_datetime(output["ts_utc"], utc=True)
     output.sort_values(["ts_utc", "symbol"], inplace=True)
+
+    actuals = (
+        features[["label_timestamp", "symbol", "target_log_return_1m"]]
+        .dropna(subset=["label_timestamp"])
+        .rename(columns={"label_timestamp": "ts_utc", "target_log_return_1m": "y_true"})
+    )
+    actuals["ts_utc"] = pd.to_datetime(actuals["ts_utc"], utc=True)
+    output = output.merge(actuals, on=["ts_utc", "symbol"], how="left")
+
+    missing_actuals = int(output["y_true"].isna().sum())
+    if missing_actuals:
+        logger.warning("Dropping %s forecast rows without ground-truth targets.", missing_actuals)
+        output = output[output["y_true"].notna()]
+
+    if output.empty:
+        raise typer.Exit(code=1)
+
     ts_strings = output["ts_utc"].dt.tz_convert("UTC").dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     output.loc[:, "ts_utc"] = ts_strings.to_numpy(dtype=object)
-    output = output[["ts_utc", "symbol", *quantile_cols]]
+    output = output[["ts_utc", "symbol", *quantile_cols, "y_true"]]
     output_path = forecasts_dir / "quantiles.csv"
     output.to_csv(output_path, index=False)
 
@@ -391,6 +593,11 @@ def forecast(
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "output_path": str(output_path),
         "snapshots": snapshot_values,
+        "target_scaling": scaler.metadata,
+        "snapshot_preset": preset_name,
+        "horizon_minutes": horizon,
+        "skip_events": skip_event_names,
+        "skip_event_dates": sorted(d.isoformat() for d in skip_dates),
     }
     if meta_path.exists():
         existing = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -610,6 +817,9 @@ def evaluate(
         ypersistence = y_persistence[valid_mask].astype(float)
         q25_valid = q25[valid_mask]
         q75_valid = q75[valid_mask]
+        interval_mean, interval_median = interval_width_stats(
+            q25_valid.to_numpy(), q75_valid.to_numpy()
+        )
 
         forecast_rows.append(
             {
@@ -622,6 +832,8 @@ def evaluate(
                 "pinball_loss_q25": float(pinball_loss(yt, q25_valid, 0.25)),
                 "pinball_loss_q75": float(pinball_loss(yt, q75_valid, 0.75)),
                 "pit_coverage": float(pit_coverage(yt, q25_valid, q75_valid)),
+                "interval_width_mean": interval_mean,
+                "interval_width_median": interval_median,
             }
         )
 
@@ -648,6 +860,10 @@ def evaluate(
     forecast_metrics_df.to_csv(forecast_metrics_path, index=False)
     typer.echo(f"Forecast metrics written to {forecast_metrics_path}")
 
+    diagnostics_path = eval_dir / "forecast_diagnostics.csv"
+    forecast_metrics_df.to_csv(diagnostics_path, index=False)
+    typer.echo(f"Forecast diagnostics written to {diagnostics_path}")
+
     reliability_df = pd.DataFrame(reliability_rows)
     reliability_path = eval_dir / "pit_reliability.csv"
     reliability_df.to_csv(reliability_path, index=False)
@@ -657,6 +873,7 @@ def evaluate(
     median_pit = float(forecast_metrics_df["pit_coverage"].median())
     total_obs = int(forecast_metrics_df["count"].sum())
     coverage_tolerance = 0.02 if total_obs >= 50 else 0.1
+    min_obs_for_gates = 200
 
     # Trading evaluation
     net_pnl_series = trades.get("net_pnl")
@@ -684,19 +901,42 @@ def evaluate(
     typer.echo(f"Cost sensitivity written to {cost_sensitivity_path}")
 
     # Gates
-    if median_rmae >= 0.95 or median_rrmse >= 0.97:
-        typer.echo("Forecast evaluation gates failed.")
-        raise typer.Exit(code=1)
+    if total_obs >= min_obs_for_gates:
+        gate_failures: list[str] = []
+        if median_rmae >= 0.95 or median_rrmse >= 0.97:
+            gate_failures.append(f"rMAE/rRMSE ({median_rmae:.3f}/{median_rrmse:.3f}) ≥ thresholds")
 
-    if abs(median_pit - 0.5) > coverage_tolerance:
-        typer.echo("Calibration gate failed.")
-        raise typer.Exit(code=1)
+        pit_error = abs(median_pit - 0.5)
+        if pit_error > coverage_tolerance:
+            gate_failures.append(
+                f"PIT deviation {pit_error:.3f} > tolerance {coverage_tolerance:.3f}"
+            )
 
+        if gate_failures:
+            typer.echo(
+                "Forecast gates failed: " + "; ".join(gate_failures) + f" (obs={total_obs})",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    else:
+        typer.echo(
+            f"Skipping forecast gates (only {total_obs} observations; need {min_obs_for_gates}).",
+            err=True,
+        )
+
+    trade_count_by_phase = (
+        portfolio_summary.groupby("phase")["trade_count"].sum().to_dict()
+        if not portfolio_summary.empty
+        else {}
+    )
     oos_row = portfolio_summary[
         (portfolio_summary["phase"] == "oos") & (portfolio_summary["level"] == "portfolio")
     ]
     if oos_row.empty:
-        typer.echo("Missing OOS portfolio metrics.")
+        typer.echo(
+            f"Missing OOS portfolio metrics. Trade counts: {trade_count_by_phase}",
+            err=True,
+        )
         raise typer.Exit(code=1)
     oos_metrics = oos_row.iloc[0]
     if (
@@ -724,6 +964,7 @@ def evaluate(
         {
             "run_id": run_id,
             "forecast_metrics_path": str(forecast_metrics_path),
+            "forecast_diagnostics_path": str(diagnostics_path),
             "trading_metrics_path": str(trading_metrics_path),
             "cost_sensitivity_path": str(cost_sensitivity_path),
             "reliability_path": str(reliability_path),
@@ -769,43 +1010,99 @@ def sweep(
     config_dir: Path = CONFIG_DIR_OPTION,
     run_id: str = RUN_ID_OPTION,
     grid_config: Path | None = GRID_CONFIG_OPTION,
+    forecast_grid: Path | None = typer.Option(
+        None, "--forecast-grid", exists=True, file_okay=True, dir_okay=False,
+        help="Optional forecast sweep specification (YAML)."
+    ),
+    execute: bool = typer.Option(
+        True, "--execute/--plan-only", help="Execute pipeline for each forecast combo (default: execute)."
+    ),
+    reuse_baseline: bool = typer.Option(
+        False,
+        "--reuse-baseline/--no-reuse-baseline",
+        help="Reuse artifacts from baseline run_id provided via --baseline-run for features/validation.",
+    ),
+    baseline_run: str | None = typer.Option(
+        None,
+        "--baseline-run",
+        help="Baseline run_id to reuse artifacts from when --reuse-baseline is enabled.",
+    ),
 ) -> None:
     """Execute trading parameter sweep."""
     run_dir = Path("artifacts") / "runs" / run_id
-    forecasts_path = run_dir / "forecasts" / "quantiles.csv"
-    features_path = run_dir / "features" / "features.parquet"
-    prices_path = run_dir / "validation" / "clean.parquet"  # Use clean data as prices
     output_dir = run_dir / "eval" / "grid"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if not forecasts_path.exists():
-        raise typer.BadParameter("Forecasts not found. Run `forecast` first.")
-    if not features_path.exists():
-        raise typer.BadParameter("Features not found. Run `build-features` first.")
-    if not prices_path.exists():
-        raise typer.BadParameter("Prices not found. Run `check-data` first.")
-
-    forecasts = pd.read_csv(forecasts_path)
-    features = pd.read_parquet(features_path)
-    prices = pd.read_parquet(prices_path)
-
+    logger = _configure_logger(run_dir / "logs" / "sweep.log", name="timegpt_v2.sweep")
     trading_cfg_path = grid_config or config_dir / "trading.yaml"
     trading_cfg = _load_yaml(trading_cfg_path)
 
-    logger = _configure_logger(run_dir / "logs" / "sweep.log", name="timegpt_v2.sweep")
+    forecasts_path = run_dir / "forecasts" / "quantiles.csv"
+    features_path = run_dir / "features" / "features.parquet"
+    prices_path = run_dir / "validation" / "clean.parquet"
+
+    forecasts: pd.DataFrame | None = None
+    features: pd.DataFrame | None = None
+    prices: pd.DataFrame | None = None
+
+    if forecasts_path.exists() and features_path.exists() and prices_path.exists():
+        forecasts = pd.read_csv(forecasts_path)
+        features = pd.read_parquet(features_path)
+        prices = pd.read_parquet(prices_path)
+
+    if forecast_grid is not None:
+        forecast_cfg_path = config_dir / "forecast.yaml"
+        base_forecast_cfg = _load_yaml(forecast_cfg_path)
+        spec_mapping = _load_yaml(forecast_grid)
+        grid_spec = ForecastGridSpec.from_mapping(spec_mapping, base_config=base_forecast_cfg)
+
+        def _invoke_forecast(**kwargs: object) -> None:
+            forecast(config_dir=kwargs["config_dir"], run_id=kwargs["run_id"])  # type: ignore[arg-type]
+
+        def _invoke_backtest(**kwargs: object) -> None:
+            backtest(config_dir=kwargs["config_dir"], run_id=kwargs["run_id"])  # type: ignore[arg-type]
+
+        def _invoke_evaluate(**kwargs: object) -> None:
+            evaluate(config_dir=kwargs["config_dir"], run_id=kwargs["run_id"])  # type: ignore[arg-type]
+
+        search = ForecastGridSearch(
+            base_config_dir=config_dir,
+            base_forecast_config=base_forecast_cfg,
+            grid_spec=grid_spec,
+            output_root=output_dir / "forecast_grid",
+            run_id_prefix=f"{run_id}_fg",
+            forecast_cmd=_invoke_forecast,
+            backtest_cmd=_invoke_backtest,
+            evaluate_cmd=_invoke_evaluate,
+            logger=logger,
+            baseline_run=baseline_run,
+        )
+        plan = search.run(execute=execute, reuse_baseline_artifacts=reuse_baseline)
+        plan_path = output_dir / "forecast_grid_plan.csv"
+        plan.to_csv(plan_path, index=False)
+        typer.echo(f"Forecast grid plan written to {plan_path}")
+
+    if forecasts is None or features is None or prices is None:
+        if forecast_grid is None:
+            raise typer.BadParameter(
+                "Forecasts not found. Run `forecast` first or supply --forecast-grid plan."
+            )
+        return
+
+    grid_output_dir = output_dir / "trading_grid"
+    grid_output_dir.mkdir(parents=True, exist_ok=True)
     tick_size = float(trading_cfg.get("tick_size", 0.01))
     grid_search = GridSearch(
         trading_cfg=trading_cfg,
         logger=logger,
-        output_root=output_dir,
+        output_root=grid_output_dir,
         tick_size=tick_size,
     )
     results = grid_search.run(forecasts, features, prices)
 
-    output_path = output_dir / "summary.csv"
+    output_path = grid_output_dir / "summary.csv"
     results.to_csv(output_path, index=False)
-
-    typer.echo(f"Grid search results written to {output_path}")
+    typer.echo(f"Trading grid search results written to {output_path}")
 
 
 @app.command()

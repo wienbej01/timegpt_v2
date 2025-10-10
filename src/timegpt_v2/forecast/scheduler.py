@@ -20,6 +20,7 @@ class ForecastScheduler:
         active_windows: Sequence[tuple[time, time]] | None = None,
         max_snapshots_per_day: int | None = None,
         max_total_snapshots: int | None = None,
+        skip_dates: Sequence[date] | None = None,
     ) -> None:
         self.dates = sorted(list(set(dates)))
         self.snapshots = sorted(list(set(snapshots)))
@@ -28,12 +29,15 @@ class ForecastScheduler:
         self.active_windows = tuple(active_windows) if active_windows else tuple()
         self.max_snapshots_per_day = int(max_snapshots_per_day) if max_snapshots_per_day else None
         self.max_total_snapshots = int(max_total_snapshots) if max_total_snapshots else None
+        self.skip_dates = set(skip_dates) if skip_dates else set()
 
     def _is_trading_day(self, dt: date) -> bool:
         """Check if a date is a trading day (not a weekend or holiday)."""
         if dt in self.holidays:
             return False
         if dt.weekday() >= 5:  # Saturday or Sunday
+            return False
+        if dt in self.skip_dates:
             return False
         return True
 

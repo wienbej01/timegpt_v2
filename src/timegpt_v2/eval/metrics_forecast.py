@@ -32,3 +32,11 @@ def rrmse(y_true: np.ndarray, y_pred: np.ndarray, y_persistence: np.ndarray) -> 
 def pit_coverage(y_true: np.ndarray, q25: np.ndarray, q75: np.ndarray) -> float:
     """Calculate the PIT coverage."""
     return float(np.mean((y_true >= q25) & (y_true <= q75)))
+
+
+def interval_width_stats(q25: np.ndarray, q75: np.ndarray) -> tuple[float, float]:
+    """Return mean and median forecast interval widths."""
+    widths = np.asarray(q75, dtype=float) - np.asarray(q25, dtype=float)
+    if widths.size == 0:
+        return 0.0, 0.0
+    return float(widths.mean()), float(np.median(widths))

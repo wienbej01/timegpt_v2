@@ -16,6 +16,23 @@ def _sample_features() -> pd.DataFrame:
                     "timestamp": ts,
                     "symbol": symbol,
                     "target_log_return_1m": 0.001 * (minute + idx),
+                    "ret_1m": 0.001,
+                    "ret_5m": 0.002,
+                    "ret_15m": 0.003,
+                    "ret_30m": 0.004,
+                    "rv_5m": 0.0001,
+                    "rv_15m": 0.0002,
+                    "rv_30m": 0.0003,
+                    "ret_skew_15m": 0.1,
+                    "ret_kurt_15m": 3.0,
+                    "vol_parkinson_30m": 0.02,
+                    "vol_garman_klass_30m": 0.018,
+                    "vwap_30m": 100.0 + idx,
+                    "vwap_trend_5m": 0.5,
+                    "vol_5m_norm": 1.2,
+                    "volume_percentile_20d": 0.8,
+                    "range_pct": 0.01,
+                    "signed_volume_5m": 10.0,
                 }
             )
     return pd.DataFrame(rows)
@@ -49,3 +66,15 @@ def test_build_x_df_future_minutes() -> None:
         assert symbol_slice["ds"].is_monotonic_increasing
         for column in ["minute_index", "fourier_sin_1", "session_open"]:
             assert column in symbol_slice.columns
+        for column in [
+            "ret_1m",
+            "ret_5m",
+            "ret_15m",
+            "ret_30m",
+            "rv_5m",
+            "rv_15m",
+            "rv_30m",
+            "volume_percentile_20d",
+        ]:
+            assert column in symbol_slice.columns
+            assert symbol_slice[column].notna().all()

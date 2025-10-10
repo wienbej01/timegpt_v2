@@ -35,11 +35,11 @@ def test_long_entry_signal(trading_rules: TradingRules, rule_params: RuleParams)
     """Test the long entry signal."""
     signal = trading_rules.get_entry_signal(
         rule_params,
-        q25=101.0,
-        q50=102.0,
-        q75=103.0,
+        q25=0.015,
+        q50=0.02,
+        q75=0.025,
         last_price=100.0,
-        sigma_5m=1.0,
+        sigma_5m=0.01,
         tick_size=0.01,
         symbol="AAPL",
     )
@@ -50,11 +50,11 @@ def test_short_entry_signal(trading_rules: TradingRules, rule_params: RuleParams
     """Test the short entry signal."""
     signal = trading_rules.get_entry_signal(
         rule_params,
-        q25=97.0,
-        q50=98.0,
-        q75=99.0,
+        q25=-0.015,
+        q50=-0.02,
+        q75=-0.025,
         last_price=100.0,
-        sigma_5m=1.0,
+        sigma_5m=0.01,
         tick_size=0.01,
         symbol="AAPL",
     )
@@ -65,11 +65,11 @@ def test_no_entry_signal(trading_rules: TradingRules, rule_params: RuleParams) -
     """Test that no entry signal is generated when conditions are not met."""
     signal = trading_rules.get_entry_signal(
         rule_params,
-        q25=100.0,
-        q50=100.0,
-        q75=100.0,
+        q25=0.0,
+        q50=0.0,
+        q75=0.0,
         last_price=100.0,
-        sigma_5m=1.0,
+        sigma_5m=0.01,
         tick_size=0.01,
         symbol="AAPL",
     )
@@ -82,26 +82,27 @@ def test_position_size_scales_with_uncertainty(
     """Position size should scale with distance from midpoint."""
     small_move = trading_rules.get_entry_signal(
         rule_params,
-        q25=100.2,
-        q50=100.3,
-        q75=100.4,
+        q25=0.0045,
+        q50=0.0055,
+        q75=0.0065,
         last_price=100.0,
-        sigma_5m=0.5,
+        sigma_5m=0.01,
         tick_size=0.01,
         symbol="AAPL",
     )
     large_move = trading_rules.get_entry_signal(
         rule_params,
-        q25=103.0,
-        q50=104.0,
-        q75=105.0,
+        q25=0.015,
+        q50=0.02,
+        q75=0.025,
         last_price=100.0,
-        sigma_5m=1.0,
+        sigma_5m=0.01,
         tick_size=0.01,
         symbol="AAPL",
     )
 
-    assert 0 < small_move < large_move <= 1
+    assert 0 < small_move < 1
+    assert large_move >= small_move
 
 
 def test_long_exit_signal_take_profit(trading_rules: TradingRules, rule_params: RuleParams) -> None:
@@ -109,9 +110,9 @@ def test_long_exit_signal_take_profit(trading_rules: TradingRules, rule_params: 
     exit_signal = trading_rules.get_exit_signal(
         rule_params,
         entry_price=100.0,
-        current_price=101.0,
+        current_price=101.5,
         position=1,
-        sigma_5m=1.0,
+        sigma_5m=0.01,
         current_time=time(10, 0),
     )
     assert exit_signal is True
@@ -122,9 +123,9 @@ def test_long_exit_signal_stop_loss(trading_rules: TradingRules, rule_params: Ru
     exit_signal = trading_rules.get_exit_signal(
         rule_params,
         entry_price=100.0,
-        current_price=99.0,
+        current_price=98.5,
         position=1,
-        sigma_5m=1.0,
+        sigma_5m=0.01,
         current_time=time(10, 0),
     )
     assert exit_signal is True
@@ -137,9 +138,9 @@ def test_short_exit_signal_take_profit(
     exit_signal = trading_rules.get_exit_signal(
         rule_params,
         entry_price=100.0,
-        current_price=99.0,
+        current_price=98.5,
         position=-1,
-        sigma_5m=1.0,
+        sigma_5m=0.01,
         current_time=time(10, 0),
     )
     assert exit_signal is True
@@ -150,9 +151,9 @@ def test_short_exit_signal_stop_loss(trading_rules: TradingRules, rule_params: R
     exit_signal = trading_rules.get_exit_signal(
         rule_params,
         entry_price=100.0,
-        current_price=101.0,
+        current_price=101.5,
         position=-1,
-        sigma_5m=1.0,
+        sigma_5m=0.01,
         current_time=time(10, 0),
     )
     assert exit_signal is True

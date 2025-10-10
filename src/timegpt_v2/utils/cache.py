@@ -20,6 +20,8 @@ class CacheKey:
     snapshot: str
     horizon: int
     quantiles: tuple[float, ...]
+    model: str = "timegpt-1"
+    levels: tuple[int, ...] = ()
 
 
 class ForecastCache:
@@ -64,7 +66,11 @@ class ForecastCache:
 
     def _path_for(self, key: CacheKey) -> Path:
         quantile_signature = ",".join(map(str, key.quantiles))
-        payload = f"{key.symbol}|{key.trade_date}|{key.snapshot}|{key.horizon}|{quantile_signature}"
+        level_signature = ",".join(map(str, key.levels)) if key.levels else ""
+        payload = (
+            f"{key.symbol}|{key.trade_date}|{key.snapshot}|{key.horizon}|"
+            f"{quantile_signature}|{key.model}|{level_signature}"
+        )
         digest = sha256(payload.encode("utf-8")).hexdigest()
         filename = f"{key.symbol}_{digest}.json"
         if self._root is None:  # pragma: no cover - guarded by caller

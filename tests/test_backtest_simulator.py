@@ -16,13 +16,14 @@ from timegpt_v2.utils.synthetic import SyntheticConfig, generate_bars
 
 def test_backtest_simulator_cashflow_accounting() -> None:
     """Simulator should produce cashflows that reconcile with trade blotter."""
-    bars = generate_bars(SyntheticConfig(symbol="SYN", minutes_per_session=30, seed=11))
+    bars = generate_bars(SyntheticConfig(symbol="SYN", minutes_per_session=120, seed=11))
     bars["timestamp"] = bars["timestamp"].dt.tz_convert("UTC")
     features = build_feature_matrix(bars)[["timestamp", "symbol", "rv_5m"]].copy()
     prices = bars[["timestamp", "symbol", "close"]].copy()
     prices["timestamp"] = prices["timestamp"].dt.tz_convert("UTC")
 
-    snapshot_row = features.iloc[5]
+    assert not features.empty
+    snapshot_row = features.iloc[-1]
     snapshot_ts = snapshot_row["timestamp"]
     rv_value = float(snapshot_row["rv_5m"])
     if rv_value <= 0:
