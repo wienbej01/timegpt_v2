@@ -2,21 +2,20 @@ snapshot_presets:
   - baseline
   - liquidity_profile
 
-horizons: [10, 15, 30]
+horizons: [1, 5, 15]
 
 quantile_sets:
   - [0.1, 0.25, 0.5, 0.75, 0.9]
-  - [0.05, 0.25, 0.5, 0.75, 0.95]
 
 level_sets:
   - [50, 80, 95]
-  - [60, 90]
 
 target_modes:
   - log_return
-  - volatility_z
+  - log_return_15m
 
 calibration_methods:
   - none
   - affine
   - isotonic
+  - conformal

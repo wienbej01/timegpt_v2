@@ -208,7 +208,6 @@ class NixtlaTimeGPTBackend:
             return self._client.forecast(
                 df=y,
                 X_df=x,
-                timeout=timeout_value,
                 **kwargs,
             )
 

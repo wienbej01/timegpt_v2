@@ -13,7 +13,11 @@ def sample_features() -> pd.DataFrame:
         "label_timestamp": pd.to_datetime(
             ["2024-07-01T14:15:00Z", "2024-07-01T14:30:00Z"], utc=True
         ),
+        "label_timestamp_15m": pd.to_datetime(
+            ["2024-07-01T14:30:00Z", "2024-07-01T14:45:00Z"], utc=True
+        ),
         "target_log_return_1m": [0.001, -0.0005],
+        "target_log_return_15m": [0.015, -0.007],
         "target_bp_ret_1m": [10.0, -5.0],
         "target_z_ret_1m": [0.2, -0.1],
         "vol_ewm_60m": [0.005, 0.005],
@@ -65,3 +69,10 @@ def test_scaler_metadata_modes() -> None:
     scaler = TargetScaler(config)
     metadata = scaler.metadata
     assert metadata["mode"] == "log_return"
+
+
+def test_scaler_log_return_15m_columns(sample_features: pd.DataFrame) -> None:
+    config = TargetScalingConfig(mode="log_return_15m")
+    scaler = TargetScaler(config)
+    assert scaler.target_column == "target_log_return_15m"
+    assert scaler.label_timestamp_column == "label_timestamp_15m"

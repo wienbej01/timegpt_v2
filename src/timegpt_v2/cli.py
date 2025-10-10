@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -14,6 +14,23 @@ import pandas as pd
 import typer
 import yaml
 
+# Load environment variables from .env if present
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    # Fallback simple .env parser
+    env_path = Path(".env")
+    if env_path.exists():
+        for _line in env_path.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _k, _v = _line.split("=", 1)
+            _k = _k.strip()
+            _v = _v.strip().strip('"').strip("'")
+            os.environ.setdefault(_k, _v)
+
 from timegpt_v2.backtest.aggregation import (
     PhaseConfig,
     assign_phases,
@@ -22,7 +39,15 @@ from timegpt_v2.backtest.aggregation import (
 )
 from timegpt_v2.backtest.grid import GridSearch
 from timegpt_v2.backtest.simulator import BacktestSimulator
-from timegpt_v2.eval.calibration import reliability_curve
+from timegpt_v2.eval.calibration import (
+    CalibrationConfig,
+    ForecastCalibrator,
+    apply_conformal_widening,
+    compute_embargo_cutoff,
+    enforce_quantile_monotonicity,
+    filter_calibration_window,
+    reliability_curve,
+)
 from timegpt_v2.eval.metrics_forecast import (
     interval_width_stats,
     mae,
@@ -492,6 +517,26 @@ def forecast(
                     raise typer.BadParameter(message) from exc
                 logger.warning("%s Falling back to deterministic backend.", message)
 
+    # Enforce live backend only; disallow stub fallback
+    if backend is None:
+        raise typer.BadParameter(
+            "TimeGPT live backend required (stub disabled). Ensure TIMEGPT_API_KEY is set in environment or .env, and set backend: nixtla in forecast.yaml."
+        )
+    
+    # Backend-mode assertion and monitoring
+    if backend_mode != "nixtla":
+        logger.error("Backend mode assertion failed: expected 'nixtla', got '%s'", backend_mode)
+        raise typer.BadParameter("Backend mode must be 'nixtla' for production runs")
+    backend_name = backend.__class__.__name__
+    logger.info(
+        "Using forecast backend=%s (mode=%s) horizon=%s freq=%s quantiles=%s preset=%s",
+        backend_name,
+        backend_mode,
+        horizon,
+        freq,
+        list(quantiles),
+        preset_name,
+    )
     client = TimeGPTClient(
         backend=backend,
         cache=cache,
@@ -549,6 +594,31 @@ def forecast(
         features=features,
         quantile_columns=quantile_cols,
     )
+    pre_calibration = combined[["forecast_ts", "unique_id", *quantile_cols]].copy()
+    pre_calibration.rename(
+        columns={col: f"{col}_pre_calib" for col in quantile_cols},
+        inplace=True,
+    )
+
+    calibration_cfg_raw = forecast_cfg.get("calibration")
+    calibration_config: CalibrationConfig | None = None
+    calibrator_loaded = False
+    conformal_applied = False
+    if calibration_cfg_raw is not None:
+        calibration_config = CalibrationConfig.from_mapping(calibration_cfg_raw)
+        calibrator = ForecastCalibrator(calibration_config)
+        calibrator_loaded = calibrator.load()
+        if calibrator_loaded:
+            logger.info("Applying calibration models from %s", calibration_config.model_path)
+            combined = calibrator.apply(combined)
+            logger.info("Calibration applied successfully")
+        else:
+            logger.warning(
+                "Calibration models not found at %s, skipping calibration",
+                calibration_config.model_path,
+            )
+
+    combined = enforce_quantile_monotonicity(combined, logger=logger)
 
     for _snapshot_ts, group in combined.groupby("snapshot_utc"):
         group_symbols = set(group["unique_id"].astype(str))
@@ -561,13 +631,28 @@ def forecast(
     snapshot_values = sorted(ts.isoformat() for ts in combined["snapshot_utc"].unique())
 
     output = combined.rename(columns={"unique_id": "symbol", "forecast_ts": "ts_utc"})
+    output["symbol"] = output["symbol"].astype(str)
     output["ts_utc"] = pd.to_datetime(output["ts_utc"], utc=True)
+    if not pre_calibration.empty:
+        pre_merge = pre_calibration.rename(columns={"forecast_ts": "ts_utc", "unique_id": "symbol"})
+        pre_merge["symbol"] = pre_merge["symbol"].astype(str)
+        pre_merge["ts_utc"] = pd.to_datetime(pre_merge["ts_utc"], utc=True)
+        output = output.merge(pre_merge, on=["ts_utc", "symbol"], how="left")
     output.sort_values(["ts_utc", "symbol"], inplace=True)
 
+    label_column = scaler.label_timestamp_column
+    target_column = scaler.target_column
+    missing_actual_columns = {label_column, "symbol", target_column} - set(features.columns)
+    if missing_actual_columns:
+        missing_list = ", ".join(sorted(missing_actual_columns))
+        raise typer.BadParameter(
+            f"Feature matrix missing required columns for targets: {missing_list}. "
+            "Ensure feature generation is up to date with target configuration."
+        )
     actuals = (
-        features[["label_timestamp", "symbol", "target_log_return_1m"]]
-        .dropna(subset=["label_timestamp"])
-        .rename(columns={"label_timestamp": "ts_utc", "target_log_return_1m": "y_true"})
+        features[[label_column, "symbol", target_column]]
+        .dropna(subset=[label_column])
+        .rename(columns={label_column: "ts_utc", target_column: "y_true"})
     )
     actuals["ts_utc"] = pd.to_datetime(actuals["ts_utc"], utc=True)
     output = output.merge(actuals, on=["ts_utc", "symbol"], how="left")
@@ -580,9 +665,30 @@ def forecast(
     if output.empty:
         raise typer.Exit(code=1)
 
+    if calibration_config and calibration_config.conformal_fallback:
+        actuals_for_conformal = output[["symbol", "ts_utc", "y_true"]]
+        if not actuals_for_conformal.empty:
+            widened = apply_conformal_widening(
+                output,
+                actuals=actuals_for_conformal,
+                pit_deviation_threshold=calibration_config.pit_deviation_threshold,
+                window=calibration_config.conformal_window,
+            )
+                #If widening returns
+            if not widened.empty:
+                output = widened
+                output = enforce_quantile_monotonicity(output, logger=logger)
+                conformal_applied = True
+            else:
+                logger.warning("Conformal widening produced no rows; skipping fallback adjustment.")
+        else:
+            logger.warning("Skipping conformal fallback because no actuals were available.")
+
     ts_strings = output["ts_utc"].dt.tz_convert("UTC").dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     output.loc[:, "ts_utc"] = ts_strings.to_numpy(dtype=object)
-    output = output[["ts_utc", "symbol", *quantile_cols, "y_true"]]
+    pre_quantile_cols = [col for col in output.columns if col.endswith("_pre_calib")]
+    ordered_columns = ["ts_utc", "symbol", *quantile_cols, *pre_quantile_cols, "y_true"]
+    output = output[ordered_columns]
     output_path = forecasts_dir / "quantiles.csv"
     output.to_csv(output_path, index=False)
 
@@ -598,6 +704,9 @@ def forecast(
         "snapshot_preset": preset_name,
         "horizon_minutes": horizon,
         "skip_events": skip_event_names,
+        "calibration_applied": calibrator_loaded,
+        "conformal_fallback_configured": bool(calibration_config and calibration_config.conformal_fallback),
+        "conformal_fallback_applied": conformal_applied,
         "skip_event_dates": sorted(d.isoformat() for d in skip_dates),
     }
     if meta_path.exists():
@@ -825,22 +934,28 @@ def evaluate(
         interval_mean, interval_median = interval_width_stats(
             q25_valid.to_numpy(), q75_valid.to_numpy()
         )
-
-        forecast_rows.append(
-            {
-                "symbol": symbol,
-                "count": int(len(yt)),
-                "mae": float(mae(yt, yp)),
-                "rmse": float(rmse(yt, yp)),
-                "rmae": float(rmae(yt, yp, ypersistence)),
-                "rrmse": float(rrmse(yt, yp, ypersistence)),
-                "pinball_loss_q25": float(pinball_loss(yt, q25_valid, 0.25)),
-                "pinball_loss_q75": float(pinball_loss(yt, q75_valid, 0.75)),
-                "pit_coverage": float(pit_coverage(yt, q25_valid, q75_valid)),
-                "interval_width_mean": interval_mean,
-                "interval_width_median": interval_median,
-            }
-        )
+        pit_post = float(pit_coverage(yt, q25_valid, q75_valid))
+        row: dict[str, object] = {
+            "symbol": symbol,
+            "count": int(len(yt)),
+            "mae": float(mae(yt, yp)),
+            "rmse": float(rmse(yt, yp)),
+            "rmae": float(rmae(yt, yp, ypersistence)),
+            "rrmse": float(rrmse(yt, yp, ypersistence)),
+            "pinball_loss_q25": float(pinball_loss(yt, q25_valid, 0.25)),
+            "pinball_loss_q75": float(pinball_loss(yt, q75_valid, 0.75)),
+            "pit_coverage": pit_post,
+            "interval_width_mean": interval_mean,
+            "interval_width_median": interval_median,
+        }
+        pre_cols = {"q25_pre_calib", "q50_pre_calib", "q75_pre_calib"}
+        if pre_cols.issubset(group.columns):
+            q25_pre = group["q25_pre_calib"].astype(float)[valid_mask]
+            q75_pre = group["q75_pre_calib"].astype(float)[valid_mask]
+            coverage_pre = float(pit_coverage(yt, q25_pre, q75_pre))
+            row["pit_coverage_pre_calib"] = coverage_pre
+            row["pit_coverage_delta"] = pit_post - coverage_pre
+        forecast_rows.append(row)
 
         binary_actual = (y_true <= q50).astype(float)
         prob_pred = np.full(len(binary_actual), 0.5, dtype=float)
@@ -876,6 +991,9 @@ def evaluate(
     median_rmae = float(forecast_metrics_df["rmae"].median())
     median_rrmse = float(forecast_metrics_df["rrmse"].median())
     median_pit = float(forecast_metrics_df["pit_coverage"].median())
+    median_pit_pre: float | None = None
+    if "pit_coverage_pre_calib" in forecast_metrics_df.columns:
+        median_pit_pre = float(forecast_metrics_df["pit_coverage_pre_calib"].median())
     total_obs = int(forecast_metrics_df["count"].sum())
     coverage_tolerance = 0.02 if total_obs >= 50 else 0.1
     min_obs_for_gates = 200
@@ -979,6 +1097,8 @@ def evaluate(
             "median_rmae": median_rmae,
             "median_rrmse": median_rrmse,
             "median_pit_coverage": median_pit,
+            "median_pit_coverage_pre_calib": median_pit_pre,
+            "median_pit_coverage_delta": (median_pit - median_pit_pre) if median_pit_pre is not None else None,
             "forecast_gate_pass": median_rmae < 0.95 and median_rrmse < 0.97,
             "calibration_gate_pass": abs(median_pit - 0.5) <= coverage_tolerance,
             "coverage_tolerance": coverage_tolerance,
@@ -1111,6 +1231,159 @@ def sweep(
     output_path = grid_output_dir / "summary.csv"
     results.to_csv(output_path, index=False)
     typer.echo(f"Trading grid search results written to {output_path}")
+
+
+@app.command()
+def calibrate(
+    config_dir: Path = CONFIG_DIR_OPTION,
+    run_id: str = RUN_ID_OPTION,
+    baseline_run: str | None = typer.Option(
+        None,
+        "--baseline-run",
+        help="Baseline run_id to use for calibration training data. If not provided, uses current run_id.",
+    ),
+    embargo_days: int = typer.Option(
+        1,
+        "--embargo-days",
+        help="Minimum trading days between calibration end and evaluation start.",
+    ),
+) -> None:
+    """Fit forecast calibration models using historical forecasts vs actuals."""
+    run_dir = Path("artifacts") / "runs" / run_id
+    logs_dir = run_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    baseline_run_id = baseline_run or run_id
+    baseline_dir = Path("artifacts") / "runs" / baseline_run_id
+
+    forecast_cfg = _load_yaml(config_dir / "forecast.yaml")
+    backtest_cfg = _load_yaml(config_dir / "backtest.yaml")
+
+    calibration_cfg_raw = forecast_cfg.get("calibration")
+    if calibration_cfg_raw is None:
+        raise typer.BadParameter("forecast.yaml must include calibration configuration")
+    calibration_config = CalibrationConfig.from_mapping(calibration_cfg_raw)
+
+    forecasts_path = baseline_dir / "forecasts" / "quantiles.csv"
+    if not forecasts_path.exists():
+        raise typer.BadParameter(f"Forecasts not found in baseline run {baseline_run_id}")
+
+    forecasts = pd.read_csv(forecasts_path)
+    if "ts_utc" not in forecasts.columns or "symbol" not in forecasts.columns:
+        raise typer.BadParameter("Forecasts must include 'ts_utc' and 'symbol' columns for calibration.")
+    if not any(col.startswith("q") for col in forecasts.columns):
+        raise typer.BadParameter("Forecasts must include quantile columns prefixed with 'q'.")
+
+    forecasts["ts_utc"] = pd.to_datetime(forecasts["ts_utc"], utc=True, errors="coerce")
+    if forecasts["ts_utc"].isna().any():
+        raise typer.BadParameter("Forecasts contain invalid timestamps in 'ts_utc'.")
+
+    if "y_true" not in forecasts.columns:
+        raise typer.BadParameter("Forecasts must include 'y_true' column for calibration.")
+
+    eval_start_months = backtest_cfg.get("oos_months", [])
+    if not eval_start_months:
+        raise typer.BadParameter("backtest.yaml must define oos_months for embargo calculation")
+
+    eval_start_str = str(eval_start_months[0]) + "-01"
+    eval_start = datetime.fromisoformat(eval_start_str + "T00:00:00").date()
+
+    holidays = get_trading_holidays(years=sorted({eval_start.year, eval_start.year - 1}))
+    embargo_cutoff = compute_embargo_cutoff(eval_start, embargo_days, holidays)
+    window_days = calibration_config.calibration_window_days if calibration_config.calibration_window_days > 0 else None
+    calibration_subset, calibration_window_start = filter_calibration_window(
+        forecasts,
+        embargo_cutoff=embargo_cutoff,
+        window_days=window_days,
+    )
+    if calibration_subset.empty:
+        window_msg = (
+            f" between {calibration_window_start} and {embargo_cutoff}"
+            if calibration_window_start
+            else f" on/before {embargo_cutoff}"
+        )
+        raise typer.BadParameter(
+            f"No calibration forecasts available{window_msg}. "
+            "Ensure prior runs exist or adjust calibration_window_days/embargo_days."
+        )
+
+    rows_in_window = len(calibration_subset)
+    calibration_subset = calibration_subset.dropna(subset=["y_true"])
+    rows_with_targets = len(calibration_subset)
+    dropped_missing_targets = rows_in_window - rows_with_targets
+    if rows_with_targets == 0:
+        raise typer.BadParameter(
+            "No calibration rows with y_true available after embargo/window filtering."
+        )
+
+    actuals_subset = calibration_subset[["symbol", "ts_utc", "y_true"]].copy()
+    forecasts_subset = calibration_subset.drop(columns=["y_true"])
+
+    logger = _configure_logger(logs_dir / "calibrate.log", name="timegpt_v2.calibrate")
+    logger.info(
+        "Starting calibration fit: method=%s, baseline_run=%s, embargo_cutoff=%s, window_start=%s, rows=%s",
+        calibration_config.method,
+        baseline_run_id,
+        embargo_cutoff.isoformat(),
+        calibration_window_start.isoformat() if calibration_window_start else "None",
+        rows_with_targets,
+    )
+    if dropped_missing_targets:
+        logger.warning("Dropped %s rows without y_true inside calibration window.", dropped_missing_targets)
+
+    calibrator = ForecastCalibrator(calibration_config)
+    if calibration_config.method == "none":
+        logger.info("Calibration method set to 'none'; skipping model fitting.")
+    else:
+        calibrator.fit(forecasts_subset, actuals_subset)
+
+    calibrator.save()
+
+    stats = calibrator.get_calibration_stats()
+    if not stats.empty:
+        logger.info("Calibration models fitted for %d symbol-quantile combinations", len(stats))
+        for _, row in stats.iterrows():
+            logger.info(
+                "Symbol %s quantile %s: method=%s, slope=%.3f, intercept=%.6f, n_samples=%d",
+                row["symbol"],
+                row["quantile"],
+                row["method"],
+                row.get("slope", float("nan")),
+                row.get("intercept", float("nan")),
+                int(row.get("n_samples", 0)) if pd.notna(row.get("n_samples", np.nan)) else 0,
+            )
+    else:
+        logger.warning("No calibration models were fitted. Check min_samples and data availability.")
+
+    meta_path = run_dir / "meta.json"
+    meta: dict[str, object] = {}
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta.setdefault("steps", {})
+    meta["command"] = "calibrate"
+
+    calibration_window_start_str = calibration_window_start.isoformat() if calibration_window_start else None
+    meta["steps"]["calibrate"] = {
+        "run_id": run_id,
+        "baseline_run": baseline_run_id,
+        "embargo_days": embargo_days,
+        "embargo_cutoff": embargo_cutoff.isoformat(),
+        "calibration_window_start": calibration_window_start_str,
+        "calibration_window_end": embargo_cutoff.isoformat(),
+        "calibration_method": calibration_config.method,
+        "calibration_window_days": calibration_config.calibration_window_days,
+        "rows_after_window": rows_in_window,
+        "rows_used": rows_with_targets,
+        "models_fitted": int(len(stats)),
+        "symbols_trained": sorted(stats["symbol"].unique()) if not stats.empty else [],
+        "model_path": calibration_config.model_path,
+        "conformal_fallback": calibration_config.conformal_fallback,
+        "pit_deviation_threshold": calibration_config.pit_deviation_threshold,
+        "conformal_window": calibration_config.conformal_window,
+    }
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    typer.echo(f"Calibration models saved to {calibration_config.model_path}")
 
 
 @app.command()

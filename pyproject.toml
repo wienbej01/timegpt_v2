@@ -11,21 +11,22 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
-  "typer[all]>=0.12",
-  "pandas>=2.1",
-  "numpy>=1.24",
-  "pydantic>=2.6",
-  "gcsfs>=2024.3.1",
-  "pyarrow>=15.0",
-  "python-dateutil>=2.8",
-  "tzdata>=2024.1",
-  "rich>=13.7",
-  "structlog>=24.1",
-  "fsspec>=2024.3.1",
-  "PyYAML>=6.0",
-  "typing_extensions>=4.12",
-  "scikit-learn>=1.4",
-  "pandas_market_calendars>=4.3.3",
+   "typer[all]>=0.12",
+   "pandas>=2.1",
+   "numpy>=1.24",
+   "pydantic>=2.6",
+   "gcsfs>=2024.3.1",
+   "pyarrow>=15.0",
+   "python-dateutil>=2.8",
+   "tzdata>=2024.1",
+   "rich>=13.7",
+   "structlog>=24.1",
+   "fsspec>=2024.3.1",
+   "PyYAML>=6.0",
+   "typing_extensions>=4.12",
+   "scikit-learn>=1.4",
+   "pandas_market_calendars>=4.3.3",
+   "nixtla>=0.5.0",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +41,7 @@ dev = [
   "pandas-stubs>=2.1.4.231227",
   "types-python-dateutil>=2.9.0.20240316",
   "types-PyYAML>=6.0.12",
+   "python-dotenv>=1.0.0",
 ]
 
 [project.urls]

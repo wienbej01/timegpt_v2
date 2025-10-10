@@ -63,11 +63,16 @@ def test_feature_pipeline_no_future_leakage() -> None:
     assert required_columns.issubset(features.columns)
 
     assert {"spy_ret_1m", "regime_high_vol", "event_earnings"}.issubset(features.columns)
+    assert {"target_log_return_15m", "label_timestamp_15m"}.issubset(features.columns)
 
     for symbol in ["AAPL", "MSFT"]:
         feature_slice = features[features["symbol"] == symbol]
         assert (feature_slice["label_timestamp"] >= feature_slice["timestamp"]).all()
         assert feature_slice["target_log_return_1m"].notna().all()
+        valid_15m = feature_slice["target_log_return_15m"].notna()
+        if valid_15m.any():
+            aligned_15m = feature_slice.loc[valid_15m]
+            assert (aligned_15m["label_timestamp_15m"] >= aligned_15m["timestamp"]).all()
 
 
 def test_feature_nan_rate_below_threshold() -> None:

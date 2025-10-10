@@ -212,3 +212,49 @@ python -m timegpt_v2.cli sweep \
 ---
 
 _End of Document_
+## 2025-10-10 — Enhancement kickoff: Live TimeGPT enforcement + .env autoload
+
+Version: v2025.10.10.1 (uncommitted)  
+Refs: [docs/build.md](docs/build.md), [src/timegpt_v2/cli.py](src/timegpt_v2/cli.py), [configs/forecast.yaml](configs/forecast.yaml)
+
+Summary
+- Enforced live Nixtla TimeGPT usage and disabled stub fallback in the forecast pipeline.
+- Auto-load secrets from .env at CLI import-time, so TIMEGPT_API_KEY/NIXTLA_API_KEY are available before backend init.
+- Prepared comprehensive enhancement plan and test suite in [docs/build.md](docs/build.md).
+
+Changes
+- Secrets loading: Added dotenv loader with fallback parser at CLI import in [src/timegpt_v2/cli.py](src/timegpt_v2/cli.py). Effect: .env at repo root is parsed on startup; env vars are available to TimeGPT backend creation.
+- Live-backend enforcement: Forecast step now rejects missing/None backend (no stub fallback). Added backend-mode INFO log for audit in [src/timegpt_v2/cli.py](src/timegpt_v2/cli.py).
+- Config: Set backend: nixtla in [configs/forecast.yaml](configs/forecast.yaml). Effect: production always targets live API.
+
+Operational impact
+- Pre-run requirement: set TIMEGPT_API_KEY (or NIXTLA_API_KEY) in .env at repo root (do not commit secrets).
+- Forecast runs will fail fast if the API key is missing or backend init fails, preventing silent stub usage.
+- Logs will explicitly state the backend type used per run in artifacts/runs/&lt;run_id&gt;/logs/forecast.log.
+
+Process flow updates
+- Ingestion → Features (unchanged).
+- Forecast (updated):
+  1) Load .env → read TIMEGPT_API_KEY
+  2) Initialize Nixtla backend (required)
+  3) Build y_df/X_df, call forecast(h=freq='min', quantiles=…)
+  4) Inverse scaling to log-return space
+  5) (Future sprint) Apply calibration, enforce quantile monotonicity
+  6) Persist forecasts with y_true alignment
+- Backtest/Evaluate (unchanged today; future sprints add calibration gates and monitors).
+
+Testing and monitoring (added/updated)
+- Function tests to be implemented per [docs/build.md](docs/build.md):
+  - Env/secrets autoload test
+  - Backend enforcement test (no stub)
+  - Forecast output integrity (no NaNs, symbol completeness)
+- Monitoring:
+  - Backend-mode assertion in forecast logs
+  - (Future sprint) Quantile monotonicity validator and PIT reliability artifacts
+
+Assumptions
+- Nixtla SDK available at runtime (nixtla or nixtlats).
+- API quotas adequate for configured snapshot cadence; retry/backoff remains active in backend wrapper.
+
+Next steps
+- Execute Sprints 2–7 in [docs/build.md](docs/build.md), starting with calibration fit/apply (embargoed) and snapshot policy upgrade.

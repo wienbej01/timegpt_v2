@@ -18,6 +18,7 @@ max_snapshots_total: null
 max_batch_size: 100
 horizon_min: 15
 freq: "min"
+backend: nixtla
 quantiles: [0.1, 0.25, 0.5, 0.75, 0.9]
 levels: [50, 80, 95]
 batch_multi_series: true
@@ -30,11 +31,14 @@ skip_events:
   - event_fomc
   - event_cpi
 target:
-  mode: log_return
+  mode: log_return_15m
   volatility_column: vol_ewm_60m
   bp_factor: 10000
 calibration:
-  method: affine
-  min_samples: 120
-  calibration_window_days: 30
-  model_path: models/calibration.json
+   method: affine
+   min_samples: 1
+   calibration_window_days: 30
+   model_path: models/calibration.json
+   conformal_fallback: false
+   pit_deviation_threshold: 0.03
+   conformal_window: 50

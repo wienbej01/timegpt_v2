@@ -33,8 +33,10 @@ class TargetScalingConfig:
 
         vol_raw = payload.get("volatility_column", cls.volatility_column)
         volatility_column = str(vol_raw)
-        if mode not in {"log_return", "basis_point", "volatility_z"}:
-            raise ValueError("target.mode must be one of: log_return, basis_point, volatility_z")
+        allowed_modes = {"log_return", "basis_point", "volatility_z", "log_return_15m"}
+        if mode not in allowed_modes:
+            allowed_str = ", ".join(sorted(allowed_modes))
+            raise ValueError(f"target.mode must be one of: {allowed_str}")
         return cls(mode=mode, bp_factor=bp_factor, volatility_column=volatility_column)
 
     def to_metadata(self) -> dict[str, object]:
@@ -55,6 +57,7 @@ class TargetScaler:
     def target_column(self) -> str:
         mapping = {
             "log_return": "target_log_return_1m",
+            "log_return_15m": "target_log_return_15m",
             "basis_point": "target_bp_ret_1m",
             "volatility_z": "target_z_ret_1m",
         }
@@ -72,7 +75,7 @@ class TargetScaler:
         quantile_columns: Sequence[str],
     ) -> pd.DataFrame:
         """Convert quantile forecasts back to log-return space."""
-        if self._config.mode == "log_return":
+        if self._config.mode in {"log_return", "log_return_15m"}:
             return forecasts
 
         updated = forecasts.copy()
@@ -87,11 +90,16 @@ class TargetScaler:
             raise ValueError(
                 f"Volatility column '{volatility_column}' missing from feature matrix."
             )
+        label_column = self.label_timestamp_column
+        if label_column not in features.columns:
+            raise ValueError(
+                f"Label timestamp column '{label_column}' missing from feature matrix."
+            )
         scale_frame = (
-            features[["label_timestamp", "symbol", volatility_column]]
+            features[[label_column, "symbol", volatility_column]]
             .rename(
                 columns={
-                    "label_timestamp": "forecast_ts",
+                    label_column: "forecast_ts",
                     "symbol": "unique_id",
                     volatility_column: "scale",
                 }
@@ -114,6 +122,17 @@ class TargetScaler:
             updated[column] = updated[column] * updated["scale"]
         updated.drop(columns="scale", inplace=True)
         return updated
+
+
+    @property
+    def label_timestamp_column(self) -> str:
+        mapping = {
+            "log_return": "label_timestamp",
+            "log_return_15m": "label_timestamp_15m",
+            "basis_point": "label_timestamp",
+            "volatility_z": "label_timestamp",
+        }
+        return mapping[self._config.mode]
 
 
 __all__ = ["TargetScaler", "TargetScalingConfig"]

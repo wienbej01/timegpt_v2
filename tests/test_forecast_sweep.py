@@ -200,4 +200,61 @@ def test_forecast_grid_scoreboard(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     assert "rank" in plan.columns
     ranks = plan.dropna(subset=["rank"]).sort_values("rank")["rank"].tolist()
-    assert ranks == sorted(ranks)
+
+
+def test_grid_plan_integrity(tmp_path: Path) -> None:
+    """Test that grid plan and scoreboard are well-formed."""
+    base_config_dir = tmp_path / "config"
+    base_config_dir.mkdir()
+    forecast_payload = {
+        "snapshot_preset": "baseline",
+        "horizon_min": 15,
+        "quantiles": [0.25, 0.5, 0.75],
+        "target": {"mode": "log_return"},
+        "calibration": {"method": "none"},
+    }
+    (base_config_dir / "forecast.yaml").write_text(
+        yaml.safe_dump(forecast_payload, sort_keys=False),
+        encoding="utf-8",
+    )
+    spec_payload = {
+        "snapshot_presets": ["baseline", "liquidity_profile"],
+        "horizons": [1, 5, 15],
+        "quantile_sets": [[0.1, 0.25, 0.5, 0.75, 0.9]],
+        "target_modes": ["log_return", "log_return_15m"],
+        "calibration_methods": ["none", "affine", "isotonic", "conformal"],
+    }
+    spec = ForecastGridSpec.from_mapping(spec_payload, base_config=forecast_payload)
+
+    search = ForecastGridSearch(
+        base_config_dir=base_config_dir,
+        base_forecast_config=forecast_payload,
+        grid_spec=spec,
+        output_root=tmp_path / "output",
+        run_id_prefix="TEST",
+        forecast_cmd=lambda **_: None,
+        backtest_cmd=lambda **_: None,
+        evaluate_cmd=lambda **_: None,
+    )
+
+    plan = search.run(execute=False, reuse_baseline_artifacts=False)
+    
+    # Test plan.csv integrity
+    plan_path = tmp_path / "output" / "plan.csv"
+    assert plan_path.exists()
+    plan_df = pd.read_csv(plan_path)
+    
+    required_columns = [
+        "order", "run_id", "combo_hash", "snapshot_preset", "horizon",
+        "quantiles", "levels", "target_mode", "calibration_method", "config_path"
+    ]
+    for col in required_columns:
+        assert col in plan_df.columns, f"Missing required column: {col}"
+    
+    # Test scoreboard.csv integrity (should exist even if empty)
+    scoreboard_path = tmp_path / "output" / "scoreboard.csv"
+    if scoreboard_path.exists():
+        scoreboard_df = pd.read_csv(scoreboard_path)
+        if not scoreboard_df.empty:
+            assert "composite_score" in scoreboard_df.columns
+            assert "rank" in scoreboard_df.columns

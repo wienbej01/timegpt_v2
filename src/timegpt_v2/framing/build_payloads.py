@@ -54,7 +54,11 @@ def build_y_df(
     renamed = filtered.rename(
         columns={"symbol": "unique_id", "timestamp": "ds", target_column: "y"}
     )
-    return renamed[["unique_id", "ds", "y"]].reset_index(drop=True)
+
+    # Include static features in y_df for exogenous consistency
+    static_columns = [col for col in STATIC_FEATURE_COLUMNS if col in renamed.columns]
+    columns = ["unique_id", "ds", "y"] + static_columns
+    return renamed[columns].reset_index(drop=True)
 
 
 def build_x_df_for_horizon(

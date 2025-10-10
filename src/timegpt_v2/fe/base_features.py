@@ -28,6 +28,8 @@ class FeaturePolicy:
     volume_median_days: int = 20
     volume_percentile_minutes: int = 390 * 20
     signed_volume_window: int = 5
+    beta_window: int = 60
+    liquidity_percentile_window: int = 390 * 5
 
 
 _DEFAULT_POLICY = FeaturePolicy()
@@ -101,6 +103,7 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
     log_open = np.log(local["open"].clip(lower=_LOG_EPS))
 
     local["target_log_return_1m"] = log_close.shift(-1) - log_close
+    local["target_log_return_15m"] = log_close.shift(-15) - log_close
     local["target_bp_ret_1m"] = local["target_log_return_1m"] * 10_000.0
 
     for window in policy.ret_windows:
@@ -109,6 +112,8 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
     minute_returns = log_close.diff()
     vol_ewm = minute_returns.pow(2).ewm(span=60, adjust=False, min_periods=1).mean().pow(0.5)
     local["vol_ewm_60m"] = vol_ewm
+    vol_ewm_15 = minute_returns.pow(2).ewm(span=15, adjust=False, min_periods=1).mean().pow(0.5)
+    local["vol_ewm_15m"] = vol_ewm_15
     scale = vol_ewm.replace(0.0, np.nan)
     scale_safe = scale.ffill().bfill().fillna(1.0)
     local["target_z_ret_1m"] = local["target_log_return_1m"] / (scale_safe + _LOG_EPS)
@@ -179,13 +184,16 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
 
     local.reset_index(inplace=True)
     local["label_timestamp"] = local["timestamp"].shift(-1)
+    local["label_timestamp_15m"] = local["timestamp"].shift(-15)
     feature_cols = [
         "timestamp",
         "symbol",
         "target_log_return_1m",
+        "target_log_return_15m",
         "target_bp_ret_1m",
         "target_z_ret_1m",
         "label_timestamp",
+        "label_timestamp_15m",
     ]
     feature_cols.extend(
         col
@@ -221,7 +229,9 @@ def _drop_sparse_rows(features: pd.DataFrame) -> pd.DataFrame:
             "timestamp",
             "symbol",
             "label_timestamp",
+            "label_timestamp_15m",
             "target_log_return_1m",
+            "target_log_return_15m",
             "target_bp_ret_1m",
             "target_z_ret_1m",
         }
