@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -198,7 +198,11 @@ def check_data(
     if not template:
         raise typer.BadParameter("configs/data.yaml must define gcs.template")
 
-    reader = GCSReader(ReaderConfig(bucket=bucket, template=template, skip_timestamp_normalization=skip_ts_norm))
+    reader = GCSReader(
+        ReaderConfig(
+            bucket=bucket, template=template, skip_timestamp_normalization=skip_ts_norm
+        )
+    )
 
     raw_frame = reader.read_universe(tickers, start_date, end_date)
     checker = DataQualityChecker(policy=DataQualityPolicy.from_dict(policy_cfg))
@@ -520,7 +524,9 @@ def forecast(
     # Enforce live backend only; disallow stub fallback
     if backend is None:
         raise typer.BadParameter(
-            "TimeGPT live backend required (stub disabled). Ensure TIMEGPT_API_KEY is set in environment or .env, and set backend: nixtla in forecast.yaml."
+            "TimeGPT live backend required (stub disabled). "
+            "Ensure TIMEGPT_API_KEY is set in environment or .env, "
+            "and set backend: nixtla in forecast.yaml."
         )
     
     # Backend-mode assertion and monitoring
@@ -562,6 +568,15 @@ def forecast(
         if not (latest == snapshot_utc).all():
             continue
         available_ids = sorted(str(uid) for uid in latest.index)
+        # Skip snapshots with insufficient history for TimeGPT prediction intervals
+        min_samples = 25
+        symbol_counts = history.groupby("unique_id").size()
+        if (symbol_counts < min_samples).any():
+            logger.warning(
+                f"Skipping snapshot {snapshot_utc}: insufficient history (< {min_samples} samples for symbols: "
+                f"{sorted(symbol_counts[symbol_counts < min_samples].index.tolist())})"
+            )
+            continue
 
         for chunk_ids in _iter_chunks(available_ids, max_batch_size):
             history_chunk = history[history["unique_id"].isin(chunk_ids)].copy()
@@ -705,7 +720,11 @@ def forecast(
         "horizon_minutes": horizon,
         "skip_events": skip_event_names,
         "calibration_applied": calibrator_loaded,
-        "conformal_fallback_configured": bool(calibration_config and calibration_config.conformal_fallback),
+        "conformal_fallback_configured": (
+            bool(calibration_config.conformal_fallback)
+            if calibration_config
+            else False
+        ),
         "conformal_fallback_applied": conformal_applied,
         "skip_event_dates": sorted(d.isoformat() for d in skip_dates),
     }
@@ -1098,7 +1117,9 @@ def evaluate(
             "median_rrmse": median_rrmse,
             "median_pit_coverage": median_pit,
             "median_pit_coverage_pre_calib": median_pit_pre,
-            "median_pit_coverage_delta": (median_pit - median_pit_pre) if median_pit_pre is not None else None,
+            "median_pit_coverage_delta": (
+                median_pit - median_pit_pre if median_pit_pre is not None else None
+            ),
             "forecast_gate_pass": median_rmae < 0.95 and median_rrmse < 0.97,
             "calibration_gate_pass": abs(median_pit - 0.5) <= coverage_tolerance,
             "coverage_tolerance": coverage_tolerance,

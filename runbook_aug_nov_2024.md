@@ -102,4 +102,24 @@ All files under `artifacts/$RUN_ID/` are write-once. A second invocation with sa
 
 ---
 
+## 8. Secrets Handling and Incident Response
+
+### Secrets Handling
+- **Environment Variables:** TIMEGPT_API_KEY or NIXTLA_API_KEY must be set in `.env` at repo root.
+- **Autoload:** Loaded at CLI import via python-dotenv; fails fast if missing.
+- **Logging:** Never echo secrets in logs; use placeholders like `[REDACTED]` in debug output.
+- **Rotation:** Update `.env` and restart processes; no secrets in version control.
+
+### Incident Response (Backend Failures)
+- **Detection:** Forecast step logs backend init status; API call failures logged with error codes.
+- **Response:**
+  - Rate limit exceeded: Wait with exponential backoff (built into Nixtla SDK).
+  - Invalid key: Abort immediately, log "Invalid API key" without exposing key.
+  - Network timeout: Retry up to 3 times, then abort.
+  - Service unavailable: Log incident, alert on-call, switch to manual mode if critical.
+- **Recovery:** Re-run with valid credentials; check Nixtla status page for outages.
+- **Prevention:** Monitor API usage; implement quota alerts.
+
+---
+
 End of Runbook

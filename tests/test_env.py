@@ -6,8 +6,6 @@ from unittest.mock import patch
 
 import pytest
 
-from timegpt_v2.cli import app
-
 
 @pytest.mark.skip(reason="Environment loading happens at import time, hard to test in isolation")
 def test_env_loading(tmp_path: Path) -> None:
@@ -29,6 +27,7 @@ def test_env_loading(tmp_path: Path) -> None:
 
         # Re-import to trigger loading
         import importlib
+
         import timegpt_v2.cli
         importlib.reload(timegpt_v2.cli)
 
@@ -52,6 +51,7 @@ def test_env_fallback_parsing(tmp_path: Path) -> None:
         with patch("dotenv.load_dotenv", side_effect=Exception("dotenv failed")):
             with patch.dict(os.environ, {}, clear=True):
                 import importlib
+
                 import timegpt_v2.cli
                 importlib.reload(timegpt_v2.cli)
 

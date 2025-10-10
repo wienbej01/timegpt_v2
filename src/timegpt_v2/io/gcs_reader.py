@@ -110,7 +110,7 @@ class GCSReader:
                 if dup_count > 0:
                     print(f"  !!! WARNING: {dup_count} duplicates found in {ticker} data !!!")
                     dup_mask = frame.duplicated(subset=["symbol", "timestamp"], keep=False)
-                    print(f"  First few duplicates:")
+                    print("  First few duplicates:")
                     print(frame[dup_mask].sort_values("timestamp").head(10)[["symbol", "timestamp", "open", "close"]])
                 frames.append(frame)
         

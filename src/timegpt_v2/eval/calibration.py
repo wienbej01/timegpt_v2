@@ -393,7 +393,7 @@ def enforce_quantile_monotonicity(forecasts: pd.DataFrame, logger=None) -> pd.Da
                     logger.warning(
                         "Quantile monotonicity violation detected at row %s: %s",
                         idx, 
-                        {col: val for col, val in zip(quantile_cols, values)}
+                        {col: val for col, val in zip(quantile_cols, values, strict=False)}
                     )
                 break
         
@@ -402,7 +402,7 @@ def enforce_quantile_monotonicity(forecasts: pd.DataFrame, logger=None) -> pd.Da
         ir = IsotonicRegression(out_of_bounds='clip')
         ir.fit(quantiles, values)
         monotonic_values = ir.predict(quantiles)
-        for col, val in zip(quantile_cols, monotonic_values):
+        for col, val in zip(quantile_cols, monotonic_values, strict=False):
             result.loc[idx, col] = val
 
     if violations_detected > 0:

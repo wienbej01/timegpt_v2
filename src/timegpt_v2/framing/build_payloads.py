@@ -28,6 +28,22 @@ STATIC_FEATURE_COLUMNS = [
     "range_pct",
     "signed_volume_5m",
 ]
+DETERMINISTIC_FEATURE_COLUMNS = [
+    "minute_of_day",
+    "minute_index",
+    "minute_progress",
+    "fourier_sin_1",
+    "fourier_cos_1",
+    "fourier_sin_2",
+    "fourier_cos_2",
+    "fourier_sin_3",
+    "fourier_cos_3",
+    "session_open",
+    "session_lunch",
+    "session_power",
+    "day_of_week",
+    "is_month_end",
+]
 
 
 def build_y_df(
@@ -55,9 +71,21 @@ def build_y_df(
         columns={"symbol": "unique_id", "timestamp": "ds", target_column: "y"}
     )
 
+    # Add deterministic features for exogenous consistency
+    renamed = deterministic.add_time_features(renamed.rename(columns={"ds": "timestamp"}))
+    renamed.rename(columns={"timestamp": "ds"}, inplace=True)
+
+    # Add exogenous features present in X_df for API consistency
+    renamed["symbol"] = renamed["unique_id"]
+
+    renamed["minute_ahead"] = 0  # Historical data has no future minutes
     # Include static features in y_df for exogenous consistency
     static_columns = [col for col in STATIC_FEATURE_COLUMNS if col in renamed.columns]
-    columns = ["unique_id", "ds", "y"] + static_columns
+    # Include deterministic features in y_df for exogenous consistency
+    deterministic_columns = [col for col in DETERMINISTIC_FEATURE_COLUMNS if col in renamed.columns]
+    # Include additional exogenous features
+    additional_exog = ["minute_ahead"]
+    columns = ["unique_id", "ds", "y"] + static_columns + deterministic_columns + additional_exog
     return renamed[columns].reset_index(drop=True)
 
 
@@ -115,7 +143,7 @@ def build_x_df_for_horizon(
         combined = combined.merge(snapshot_rows, on="unique_id", how="left")
 
     ordered_cols = ["unique_id", "ds", "minute_ahead"] + [
-        col for col in combined.columns if col not in {"unique_id", "ds", "minute_ahead"}
+        col for col in combined.columns if col not in {"unique_id", "ds", "minute_ahead", "symbol"}
     ]
     combined.sort_values(["unique_id", "ds"], inplace=True)
     return combined[ordered_cols].reset_index(drop=True)

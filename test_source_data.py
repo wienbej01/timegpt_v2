@@ -1,6 +1,6 @@
-import pandas as pd
-import numpy as np
 from zoneinfo import ZoneInfo
+
+import pandas as pd
 
 ET_ZONE = ZoneInfo("America/New_York")
 

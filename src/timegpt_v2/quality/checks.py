@@ -88,7 +88,7 @@ class DataQualityChecker:
             
             # Check which symbols have duplicates
             dup_by_symbol = working[dup_mask].groupby("symbol").size()
-            print(f"\nDuplicates by symbol:")
+            print("\nDuplicates by symbol:")
             print(dup_by_symbol)
 
         rows_before = len(working)

@@ -5,9 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-import typer
 
-from timegpt_v2.cli import app
 from timegpt_v2.forecast.timegpt_client import NixtlaTimeGPTBackend
 
 

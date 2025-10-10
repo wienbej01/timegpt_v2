@@ -1,7 +1,7 @@
-# TimeGPT v2 — System Technical Documentation  
-**Version:** Sprint 5 (Forecast Grid & Operational Automation)  
-**Last Updated:** 2025-10-10T04:58:25Z  
-**Maintainer:** Kilo Code  
+# TimeGPT v2 — System Technical Documentation
+**Version:** Sprint 8 (Documentation, Ops, and Handoffs)
+**Last Updated:** 2025-10-10T15:11:56Z
+**Maintainer:** Kilo Code
 **Git Reference:** _pending commit_
 
 ---
@@ -86,22 +86,59 @@ High-level workflow:
 
 ---
 
-## 3. Module / API Map
+## 3. Sprint 8 Additions
+
+### 3.1 Backend Enforcement and .env Loader
+- **Module:** [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1)
+- **Key Changes:**
+  - Auto-load secrets from `.env` at CLI import-time using `python-dotenv` with fallback parser.
+  - Enforce live Nixtla backend: forecast step rejects missing/None backend, no stub fallback.
+  - Added backend-mode INFO log for audit in forecast logs.
+- **Config:** Set `backend: nixtla` in [`configs/forecast.yaml`](configs/forecast.yaml:20).
+- **Operational Impact:** Pre-run requirement for `TIMEGPT_API_KEY` or `NIXTLA_API_KEY` in `.env`; fails fast on missing key or init failure.
+
+### 3.2 Calibration Fit/Apply Workflow and Embargo
+- **Module:** [`src/timegpt_v2/eval/calibration.py`](src/timegpt_v2/eval/calibration.py:1)
+- **Key Classes:**
+  - `ForecastCalibrator.fit()`: Fits affine/isotonic models from historical forecasts vs y_true.
+  - `ForecastCalibrator.apply()`: Applies corrections post-inverse scaling, enforces quantile monotonicity (q10≤q25≤q50≤q75≤q90).
+  - `CalibrationModel`: Persists to `models/calibration.json`.
+- **Embargo:** Calibration window ends ≥1 trading day before evaluation period start.
+- **Fallback:** Conformal widening if validation PIT deviation >0.03.
+- **Interoperability:** Forecast consumes `models/calibration.json` if present; evaluate reports pre/post coverage deltas.
+
+### 3.3 Snapshot Policy and Horizon/Label Alignment
+- **Module:** [`src/timegpt_v2/forecast/scheduler.py`](src/timegpt_v2/forecast/scheduler.py:1), [`src/timegpt_v2/forecast/scaling.py`](src/timegpt_v2/forecast/scaling.py:1)
+- **Key Changes:**
+  - Set `snapshot_preset: liquidity_profile` (5/day) with `skip_events: [event_fomc, event_cpi]`.
+  - Horizon/label alignment: Added `target_log_return_15m` in [`src/timegpt_v2/fe/base_features.py`](src/timegpt_v2/fe/base_features.py:1); updated `TargetScaler.target_column()` for `target.mode: log_return_15m`.
+- **Verification:** Meta lists 5× snapshots/day; y_df ds equals snapshot_utc, label_timestamp equals forecast_ts.
+
+### 3.4 Monitoring Additions (Monotonicity, Backend-Mode)
+- **Module:** [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:495), [`src/timegpt_v2/eval/calibration.py`](src/timegpt_v2/eval/calibration.py:234)
+- **Key Changes:**
+  - Backend-mode assertion and quantile monotonicity validator during forecast.
+  - Violations persisted to logs; evaluate logs calibration gate pass/fail.
+  - Insufficient history check: skips snapshots with <25 samples per symbol to prevent TimeGPT API errors.
+
+---
+
+## 5. Module / API Map
 
 | Area | Module | Key Functions / Classes |
 |------|--------|-------------------------|
-| CLI | [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1) | Typer commands (`check-data`, `build-features`, `forecast`, `backtest`, `evaluate`, `report`, `sweep`). Sweep now accepts `--forecast-grid`, `--plan-only`, `--reuse-baseline`, `--baseline-run`. |
-| Feature Engineering | [`src/timegpt_v2/fe/base_features.py`](src/timegpt_v2/fe/base_features.py:1) | `build_feature_matrix`, expanded windows (ret_30m, rv_30m), skew/kurtosis, VWAP trend, volume percentile, signed volume. |
+| CLI | [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1) | Typer commands (`check-data`, `build-features`, `forecast`, `backtest`, `evaluate`, `report`, `sweep`, `calibrate`). Sweep now accepts `--forecast-grid`, `--plan-only`, `--reuse-baseline`, `--baseline-run`. |
+| Feature Engineering | [`src/timegpt_v2/fe/base_features.py`](src/timegpt_v2/fe/base_features.py:1) | `build_feature_matrix`, expanded windows (ret_30m, rv_30m), skew/kurtosis, VWAP trend, volume percentile, signed volume, vol_ewm_15m, lagged market context. |
 | Forecast Client | [`src/timegpt_v2/forecast/timegpt_client.py`](src/timegpt_v2/forecast/timegpt_client.py:1) | Nixtla backend wrapper, caching, config (freq, horizon, quantiles, levels, model). |
-| Calibration | [`src/timegpt_v2/eval/calibration.py`](src/timegpt_v2/eval/calibration.py:1) | `ForecastCalibrator`, `CalibrationModel`, affine + isotonic support, persistence. |
-| Scaling | [`src/timegpt_v2/forecast/scaling.py`](src/timegpt_v2/forecast/scaling.py:1) | `TargetScaler`, reversible scaling across log/bp/z modes. |
+| Calibration | [`src/timegpt_v2/eval/calibration.py`](src/timegpt_v2/eval/calibration.py:1) | `ForecastCalibrator`, `CalibrationModel`, affine + isotonic support, persistence, monotonic projection. |
+| Scaling | [`src/timegpt_v2/forecast/scaling.py`](src/timegpt_v2/forecast/scaling.py:1) | `TargetScaler`, reversible scaling across log/bp/z/log_return_15m modes. |
 | Scheduler | [`src/timegpt_v2/forecast/scheduler.py`](src/timegpt_v2/forecast/scheduler.py:1) | Snapshot presets, skip_dates, active windows, quota enforcement. |
-| Backtest | [`src/timegpt_v2/backtest/simulator.py`](src/timegpt_v2/backtest/simulator.py:1), [`src/timegpt_v2/trading/rules.py`](src/timegpt_v2/trading/rules.py:1) | Position sizing on forecast z-scores, EOD stop/time stops, costs. |
+| Backtest | [`src/timegpt_v2/backtest/simulator.py`](src/timegpt_v2/backtest/simulator.py:1), [`src/timegpt_v2/trading/rules.py`](src/timegpt_v2/trading/rules.py:1) | Position sizing on calibrated quantiles & volatility, time/price exits, costs. |
 | Forecast Sweeps | [`src/timegpt_v2/forecast/sweep.py`](src/timegpt_v2/forecast/sweep.py:1) | See § 2.1. |
 
 ---
 
-## 4. Config Schema
+## 6. Config Schema
 
 ### 4.1 `configs/forecast.yaml`
 Key fields post Sprint 5:
@@ -157,7 +194,7 @@ calibration_methods: [none, affine, isotonic]
 
 ---
 
-## 5. Determinism & Logging
+## 7. Determinism & Logging
 
 - Forecast sweeps seed RNG per combination via MD5-derived integers to maintain reproducibility.
 - Execution logs: `logs/forecast.log`, `logs/backtest.log`, `logs/sweep.log`.
@@ -166,7 +203,7 @@ calibration_methods: [none, affine, isotonic]
 
 ---
 
-## 6. Error Handling & Guardrails
+## 8. Error Handling & Guardrails
 
 - CLI commands raise `typer.BadParameter` for misconfigured grids, missing baseline artifacts, or missing data.
 - Forecast sweep ensures scoreboard only written when composite scores present; otherwise clean removal.
@@ -174,7 +211,7 @@ calibration_methods: [none, affine, isotonic]
 
 ---
 
-## 7. Outstanding Tasks
+## 9. Outstanding Tasks
 
 - Extend sweep spec to cover backend model selection (TimeGPT-1 vs long horizon).
 - Integrate weekly cron automation (e.g., GitHub Action or Airflow DAG) referencing Make targets.
@@ -182,7 +219,7 @@ calibration_methods: [none, affine, isotonic]
 
 ---
 
-## 8. Usage Examples
+## 10. Usage Examples
 
 ```bash
 # Plan forecast sweep without execution
@@ -203,10 +240,49 @@ python -m timegpt_v2.cli sweep \
 
 ---
 
-## 9. Change Log
+## 10. Runbook: Secrets Handling and Incident Response
+
+### 10.1 Secrets Handling
+- **Environment Variables:** TIMEGPT_API_KEY or NIXTLA_API_KEY must be set in `.env` at repo root.
+- **Autoload:** Loaded at CLI import via python-dotenv; fails fast if missing.
+- **Logging:** Never echo secrets in logs; use placeholders like `[REDACTED]` in debug output.
+- **Rotation:** Update `.env` and restart processes; no secrets in version control.
+
+### 10.2 Incident Response (Backend Failures)
+- **Detection:** Forecast step logs backend init status; API call failures logged with error codes.
+- **Response:**
+  - Rate limit exceeded: Wait with exponential backoff (built into Nixtla SDK).
+  - Invalid key: Abort immediately, log "Invalid API key" without exposing key.
+  - Network timeout: Retry up to 3 times, then abort.
+  - Service unavailable: Log incident, alert on-call, switch to manual mode if critical.
+- **Recovery:** Re-run with valid credentials; check Nixtla status page for outages.
+- **Prevention:** Monitor API usage; implement quota alerts.
+
+---
+
+## 12. Handoffs to Other Teams
+
+### 12.1 Risk & Execution Controls
+- **Symbol-level Microstructure:** Review and refine half_spread_ticks and fee_bps in [`configs/trading.yaml`](configs/trading.yaml:1) for each symbol.
+- **Circuit Breakers:** Implement position limits, volatility halts, and emergency stops based on drawdown thresholds.
+
+### 12.2 Testing & Analytics Hub
+- **Embaroed WFO:** Validate calibration embargo prevents leakage in walk-forward optimization.
+- **Ablations:** Run feature importance tests and attribution analysis on promoted configs.
+- **Monitoring:** Set up dashboards for PIT coverage, calibration drift, and trading metrics.
+
+### 12.3 Engineering & Platform
+- **Calibrate CLI Command:** Deploy and monitor the new `calibrate` command in production pipelines.
+- **Monotonic Projection Utility:** Ensure quantile ordering is enforced in all forecast outputs.
+- **CI Jobs:** Add automated tests for calibration, monotonicity, and backend enforcement in CI/CD.
+
+---
+
+## 11. Change Log
 
 | Date (UTC) | Summary | Details |
 |------------|---------|---------|
+| 2025-10-10 | Sprint 8 implementation: Updated docs with backend enforcement, calibration workflow, snapshot policy, horizon alignment, monitoring; added runbook for secrets/incidents, handoffs to other teams; added insufficient history check to prevent TimeGPT API errors.
 | 2025-10-10 | Sprint 5 implementation | Added forecast sweep engine, config schema, calibration metadata, documentation, tests, Make targets. |
 
 ---

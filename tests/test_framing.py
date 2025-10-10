@@ -56,7 +56,30 @@ def test_build_y_df_shapes_and_monotonicity() -> None:
     snapshot = pd.Timestamp("2024-01-02 14:30", tz="UTC")
     y_df = build_y_df(features, snapshot)
 
-    assert list(y_df.columns) == ["unique_id", "ds", "y"]
+    # Check that required columns are present
+    required_cols = ["unique_id", "ds", "y"]
+    for col in required_cols:
+        assert col in y_df.columns
+
+    # Check that deterministic features are included
+    deterministic_features = [
+        "minute_of_day", "minute_index", "minute_progress",
+        "fourier_sin_1", "fourier_cos_1", "fourier_sin_2", "fourier_cos_2",
+        "fourier_sin_3", "fourier_cos_3", "session_open", "session_lunch",
+        "session_power", "day_of_week", "is_month_end"
+    ]
+    for col in deterministic_features:
+        assert col in y_df.columns
+
+    # Check that static features are included
+    static_features = [
+        "ret_1m", "ret_5m", "ret_15m", "ret_30m", "rv_5m", "rv_15m", "rv_30m",
+        "ret_skew_15m", "ret_kurt_15m", "vol_parkinson_30m", "vol_garman_klass_30m",
+        "vwap_30m", "vwap_trend_5m", "vol_5m_norm", "volume_percentile_20d",
+        "range_pct", "signed_volume_5m"
+    ]
+    for col in static_features:
+        assert col in y_df.columns
     for symbol in ["AAPL", "MSFT"]:
         symbol_slice = y_df[y_df["unique_id"] == symbol]
         assert not symbol_slice.empty

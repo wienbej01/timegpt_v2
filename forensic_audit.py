@@ -1,5 +1,7 @@
 from datetime import date
+
 import pandas as pd
+
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
 from timegpt_v2.quality.checks import DataQualityChecker
 
@@ -13,7 +15,10 @@ CONFIG = ReaderConfig(
 def log_audit(stage, df, description=""):
     rows = len(df) if df is not None else 0
     if df is not None:
-        dupes = df.duplicated(subset=["symbol", "timestamp"]).sum() if "symbol" in df.columns and "timestamp" in df.columns else "N/A"
+        if "symbol" in df.columns and "timestamp" in df.columns:
+            dupes = df.duplicated(subset=["symbol", "timestamp"]).sum()
+        else:
+            dupes = "N/A"
         symbols = df['symbol'].unique().tolist() if "symbol" in df.columns else "N/A"
         print(f"[{stage}] {rows} rows, duplicates: {dupes}, symbols: {symbols} - {description}")
     else:
@@ -27,13 +32,14 @@ def forensic_read_universe(tickers, start_date, end_date):
     for ticker in tickers:
         print(f"\n[TICKER {ticker}] Starting read_range")
         ticker_df = reader.read_range(ticker, start_date, end_date)
-        log_audit(f"TICKER_{ticker}_FINAL", ticker_df, f"ticker data loaded")
+        log_audit(f"TICKER_{ticker}_FINAL", ticker_df, "ticker data loaded")
         if not ticker_df.empty:
             all_frames.append(ticker_df)
 
     print(f"\n[CONCAT] Combining {len(all_frames)} ticker frames")
     combined = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame()
-    log_audit("CONCAT_FINAL", combined, f"combined, duplicates: {combined.duplicated(subset=['symbol', 'timestamp']).sum()}")
+    duplicates = combined.duplicated(subset=['symbol', 'timestamp']).sum()
+    log_audit("CONCAT_FINAL", combined, f"combined, duplicates: {duplicates}")
 
     return combined
 

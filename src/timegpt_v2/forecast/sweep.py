@@ -4,10 +4,11 @@ import copy
 import json
 import logging
 import shutil
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import md5
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
