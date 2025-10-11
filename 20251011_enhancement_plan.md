@@ -255,7 +255,7 @@ Add/extend these keys (top-level file suggestions in parentheses):
 
 ---
 
-### **Sprint 8 — Exogenous Features (X_df) with Minimal Calls**
+### **Sprint 8 — Exogenous Features (X_df) with Minimal Calls** ✅ COMPLETED
 
 **Goal**: Add `X_df` (market/sector/seasonality/event flags) to improve signal. Keep API usage low via **precompute once** and **cache**.
 

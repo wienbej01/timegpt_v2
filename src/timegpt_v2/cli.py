@@ -81,7 +81,7 @@ from timegpt_v2.forecast.timegpt_client import (
     TimeGPTRetryPolicy,
     _LocalDeterministicBackend,
 )
-from timegpt_v2.framing.build_payloads import build_x_df_for_horizon, build_y_df
+from timegpt_v2.framing.build_payloads import EXOGENOUS_FEATURE_COLUMNS, build_x_df_for_horizon, build_y_df
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
 from timegpt_v2.quality.checks import DataQualityChecker
 from timegpt_v2.quality.contracts import DataQualityPolicy
@@ -614,9 +614,9 @@ def forecast(
                 horizon=horizon,
                 freq=freq,
                 quantiles=quantiles,
+                hist_exog_list=EXOGENOUS_FEATURE_COLUMNS,
             )
-            if forecast_df.empty:
-                raise typer.Exit(code=1)
+            raise typer.Exit(code=1)
             forecast_df["snapshot_utc"] = snapshot_utc
             results.append(forecast_df)
 

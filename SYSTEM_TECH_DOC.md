@@ -1,4 +1,8 @@
 # TimeGPT v2 — System Technical Documentation
+**Version:** Sprint 8 (Exogenous Features)
+**Last Updated:** 2025-10-11T10:57:00Z
+**Version:** Sprint 7 (Portfolio, Cost Sensitivity, OOS)
+**Last Updated:** 2025-10-11T07:58:00Z
 **Version:** Sprint 5 (Quantile-Aware Trading Rules)
 **Last Updated:** 2025-10-11T07:58:00Z
 **Version:** Sprint 4 (Calibration + Coverage Diagnostics)
@@ -9,8 +13,6 @@
 **Last Updated:** 2025-10-11T05:36:00Z
 **Version:** Sprint 1 (GCS Reader + Data Quality Gates)
 **Last Updated:** 2025-10-11T03:40:00Z
-**Version:** Sprint 8 (Documentation, Ops, and Handoffs)
-**Last Updated:** 2025-10-10T15:11:56Z
 **Maintainer:** Kilo Code
 **Git Reference:** _pending commit_
 
@@ -242,6 +244,38 @@ High-level workflow:
 
 ---
 
+## 8. Sprint 8 Additions
+
+### 8.1 Exogenous Features Integration
+- **Module:** [`src/timegpt_v2/framing/build_payloads.py`](src/timegpt_v2/framing/build_payloads.py:1)
+- **Key Changes:**
+  - Added `EXOGENOUS_FEATURE_COLUMNS` list: `["spy_ret_1m", "spy_vol_30m", "regime_high_vol", "regime_high_dispersion", "event_earnings", "event_fomc", "event_cpi"]`.
+  - Modified `build_y_df()` to include exogenous columns in historical Y_df for TimeGPT.
+  - Modified `build_x_df_for_horizon()` to project exogenous values forward at snapshot levels (constant propagation).
+- **Features:** Enables market regime and event information in forecasting without lookahead bias; exogenous values held constant in future projections.
+
+### 8.2 TimeGPT Client Exogenous Support
+- **Module:** [`src/timegpt_v2/forecast/timegpt_client.py`](src/timegpt_v2/forecast/timegpt_client.py:1)
+- **Key Changes:**
+  - Updated `TimeGPTBackend` protocol to accept `hist_exog_list` parameter.
+  - Modified `NixtlaTimeGPTBackend` to pass `hist_exog_list` to Nixtla SDK forecast calls.
+  - Updated `TimeGPTClient.forecast()` to accept and forward `hist_exog_list`.
+- **Features:** Passes exogenous column specifications to TimeGPT API for improved signal quality.
+
+### 8.3 CLI Forecast Command Exogenous Usage
+- **Module:** [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1)
+- **Key Changes:** Forecast command now passes `EXOGENOUS_FEATURE_COLUMNS` as `hist_exog_list` to TimeGPT client.
+- **Features:** Minimal API calls; re-forecasts only when exogenous features are added or updated, respecting budget constraints.
+
+### 8.4 Tests
+- [`tests/test_framing.py`](tests/test_framing.py:1): Updated to validate exogenous column inclusion in Y_df and X_df.
+- [`tests/test_forecast_client.py`](tests/test_forecast_client.py:1): Added tests for exogenous list passing to backend.
+
+### 8.5 Documentation
+- [`docs/FORECASTING.md`](docs/FORECASTING.md:1): Added section on exogenous features integration, hist_exog_list requirements, and alignment.
+
+---
+
 ## 5. Module / API Map
 
 | Area | Module | Key Functions / Classes |
@@ -377,6 +411,7 @@ python -m timegpt_v2.cli sweep \
   - Service unavailable: Log incident, alert on-call, switch to manual mode if critical.
 - **Recovery:** Re-run with valid credentials; check Nixtla status page for outages.
 - **Prevention:** Monitor API usage; implement quota alerts.
+| 2025-10-11 | Sprint 8 implementation: Exogenous Features | Added exogenous features integration with `EXOGENOUS_FEATURE_COLUMNS` list; modified `build_y_df` and `build_x_df_for_horizon` to include exogenous columns in Y_df and project forward in X_df; updated TimeGPT client and backend to support `hist_exog_list` parameter; CLI forecast command passes exogenous list; updated docs/FORECASTING.md; all tests pass including exogenous column validation. |
 | 2025-10-11 | Sprint 5 implementation: Quantile-Aware Trading Rules | Implemented EV(after-cost) > 0 check and uncertainty suppression using q-spread in trading rules; fixed position sizing to 1.0 unit exposure; updated tests for new logic; updated docs/TRADING_RULES.md; all tests pass including uncertainty suppression and EV validation. |
 | 2025-10-11 | Sprint 4 implementation: Calibration + Coverage Diagnostics | Implemented post-hoc quantile widening (`widen_intervals`), split-conformal prediction (`split_conformal`), and coverage reporting (`generate_coverage_report`) in calibration.py; enhanced evaluate command to generate per-symbol, per-snapshot coverage reports; updated docs/EVALUATION.md with calibration methods and gates; all tests pass including widening behavior and coverage calculations. |
 

@@ -29,6 +29,7 @@ class TimeGPTBackend(Protocol):
         h: int,
         freq: str,
         quantiles: Sequence[float],
+        hist_exog_list: Sequence[str] | None = None,
     ) -> pd.DataFrame: ...
 
 
@@ -63,6 +64,7 @@ class _LocalDeterministicBackend:
         h: int,
         freq: str,
         quantiles: Sequence[float],
+        hist_exog_list: Sequence[str] | None = None,
     ) -> pd.DataFrame:
         rows: list[dict[str, object]] = []
         grouped = y.groupby("unique_id")
@@ -139,6 +141,7 @@ class NixtlaTimeGPTBackend:
         h: int,
         freq: str,
         quantiles: Sequence[float],
+        hist_exog_list: Sequence[str] | None = None,
     ) -> pd.DataFrame:
         attempts = 0
         last_error: Exception | None = None
@@ -191,12 +194,15 @@ class NixtlaTimeGPTBackend:
         h: int,
         freq: str,
         quantiles: Sequence[float],
+        hist_exog_list: Sequence[str] | None = None,
     ) -> pd.DataFrame:
         kwargs = {
             "h": h,
             "freq": freq,
             "quantiles": list(quantiles),
         }
+        if hist_exog_list:
+            kwargs["hist_exog_list"] = list(hist_exog_list)
         timeout = os.environ.get("TIMEGPT_TIMEOUT")
         timeout_value = self._timeout
         if timeout is not None:
@@ -291,6 +297,7 @@ class TimeGPTClient:
         horizon: int | None = None,
         freq: str | None = None,
         quantiles: Sequence[float] | None = None,
+        hist_exog_list: Sequence[str] | None = None,
     ) -> pd.DataFrame:
         """Forecast quantiles for the provided multi-series payload."""
 
@@ -351,6 +358,7 @@ class TimeGPTClient:
                 h=horizon_minutes,
                 freq=freq_value,
                 quantiles=quantiles_tuple,
+                hist_exog_list=hist_exog_list,
             )
             pivot = forecast_result.pivot(index="unique_id", columns="quantile", values="value")
             for unique_id, key in zip(missing_ids, cache_keys, strict=True):

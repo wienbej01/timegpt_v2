@@ -44,6 +44,15 @@ DETERMINISTIC_FEATURE_COLUMNS = [
     "day_of_week",
     "is_month_end",
 ]
+EXOGENOUS_FEATURE_COLUMNS = [
+    "spy_ret_1m",
+    "spy_vol_30m",
+    "regime_high_vol",
+    "regime_high_dispersion",
+    "event_earnings",
+    "event_fomc",
+    "event_cpi",
+]
 
 
 def build_y_df(
@@ -105,9 +114,11 @@ def build_y_df(
     static_columns = [col for col in STATIC_FEATURE_COLUMNS if col in renamed.columns]
     # Include deterministic features in y_df for exogenous consistency
     deterministic_columns = [col for col in DETERMINISTIC_FEATURE_COLUMNS if col in renamed.columns]
+    # Include exogenous features
+    exogenous_columns = [col for col in EXOGENOUS_FEATURE_COLUMNS if col in renamed.columns]
     # Include additional exogenous features
     additional_exog = ["minute_ahead"]
-    columns = ["unique_id", "ds", "y"] + static_columns + deterministic_columns + additional_exog
+    columns = ["unique_id", "ds", "y"] + static_columns + deterministic_columns + exogenous_columns + additional_exog
     return renamed[columns].reset_index(drop=True)
 
 
@@ -151,13 +162,15 @@ def build_x_df_for_horizon(
     combined = pd.concat(future_frames, ignore_index=True)
 
     static_columns = [col for col in STATIC_FEATURE_COLUMNS if col in features.columns]
-    if static_columns:
+    exogenous_columns = [col for col in EXOGENOUS_FEATURE_COLUMNS if col in features.columns]
+    merge_columns = static_columns + exogenous_columns
+    if merge_columns:
         working = features.copy()
         working["timestamp"] = pd.to_datetime(working["timestamp"], utc=True)
         snapshot_rows = (
             working.loc[
                 (working["timestamp"] == snapshot) & working["symbol"].isin(base_symbols),
-                ["symbol", *static_columns],
+                ["symbol", *merge_columns],
             ]
             .drop_duplicates(subset="symbol", keep="last")
             .rename(columns={"symbol": "unique_id"})
