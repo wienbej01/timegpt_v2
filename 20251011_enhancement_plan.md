@@ -107,6 +107,7 @@ Add/extend these keys (top-level file suggestions in parentheses):
 
 ---
 
+### **Sprint 2 — Leakage-Safe Feature Engineering (no API calls)** ✅ COMPLETED
 ### **Sprint 2 — Leakage-Safe Feature Engineering (no API calls)**
 
 **Goal**: Return-space target; base vol features; deterministic intraday clocks; optional SPY lagged context.

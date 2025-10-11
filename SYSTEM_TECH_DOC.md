@@ -1,4 +1,6 @@
 # TimeGPT v2 — System Technical Documentation
+**Version:** Sprint 2 (Leakage-Safe Feature Engineering)
+**Last Updated:** 2025-10-11T05:36:00Z
 **Version:** Sprint 1 (GCS Reader + Data Quality Gates)
 **Last Updated:** 2025-10-11T03:40:00Z
 **Version:** Sprint 8 (Documentation, Ops, and Handoffs)
@@ -282,6 +284,7 @@ python -m timegpt_v2.cli sweep \
 
 ## 11. Change Log
 
+| 2025-10-11 | Sprint 2 implementation: Leakage-safe feature engineering | Implemented comprehensive feature engineering pipeline with return/volatility features (ret_1m/5m/15m/30m, rv_5m/15m/30m, ATR, Garman-Klass/Parkinson, VWAP, volume norms), deterministic intraday clocks (minute index, Fourier terms, session buckets), and SPY lagged context features (spy_ret_1m, spy_vol_30m, regime flags, event dummies); CLI build-features exports per-symbol parquet with 58 features; all tests pass including no future leakage verification. |
 | Date (UTC) | Summary | Details |
 |------------|---------|---------|
 | 2025-10-11 | Sprint 1 implementation: GCS reader + data quality gates | Implemented GCS parquet ingestion with column aliasing, ET timezone normalization, RTH filtering; added comprehensive data quality checks (schema, monotonicity, price sanity, RTH completeness, adjusted prices, gapless grid with ffill, outliers); CLI check-data command validates and cleans data, writes DQ report; all tests pass for 10 symbols (AAPL/MSFT/NVDA/TSLA/AMZN/GOOGL/META/NFLX/AMD/CRM) from July-Nov 2024. |
