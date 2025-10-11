@@ -536,6 +536,7 @@ def apply_conformal_widening(
 
     return result
 
+
 def widen_intervals(
     q25: np.ndarray, q50: np.ndarray, q75: np.ndarray, alpha: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -569,16 +570,18 @@ def split_conformal(
     conformal_width = sorted_residuals[k]
 
     # Apply to quantiles: widen by conformal_width
-    q25_adjusted = quantiles[:, 0] - conformal_width  # Assuming quantiles is (n, 3) for q25, q50, q75
+    q25_adjusted = (
+        quantiles[:, 0] - conformal_width
+    )  # Assuming quantiles is (n, 3) for q25, q50, q75
     q75_adjusted = quantiles[:, 2] + conformal_width
     q50_adjusted = quantiles[:, 1]  # q50 unchanged
 
-    return np.column_stack([q25_adjusted, q50_adjusted, q75_adjusted]), np.full(len(quantiles), conformal_width)
+    return np.column_stack([q25_adjusted, q50_adjusted, q75_adjusted]), np.full(
+        len(quantiles), conformal_width
+    )
 
 
-def generate_coverage_report(
-    forecasts: pd.DataFrame, actuals: pd.DataFrame
-) -> pd.DataFrame:
+def generate_coverage_report(forecasts: pd.DataFrame, actuals: pd.DataFrame) -> pd.DataFrame:
     """Generate coverage report per symbol and snapshot."""
     if forecasts.empty or actuals.empty:
         return pd.DataFrame()
@@ -606,12 +609,14 @@ def generate_coverage_report(
         coverage = np.mean((y_true >= q25) & (y_true <= q75))
         count = len(group)
 
-        report_rows.append({
-            "symbol": symbol,
-            "snapshot_utc": snapshot,
-            "coverage": coverage,
-            "count": count,
-        })
+        report_rows.append(
+            {
+                "symbol": symbol,
+                "snapshot_utc": snapshot,
+                "coverage": coverage,
+                "count": count,
+            }
+        )
 
     return pd.DataFrame(report_rows)
 

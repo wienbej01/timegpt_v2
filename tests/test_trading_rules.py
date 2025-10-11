@@ -76,8 +76,6 @@ def test_no_entry_signal(trading_rules: TradingRules, rule_params: RuleParams) -
     assert signal == 0
 
 
-
-
 def test_long_exit_signal_take_profit(trading_rules: TradingRules, rule_params: RuleParams) -> None:
     """Test the long exit signal for take profit."""
     exit_signal = trading_rules.get_exit_signal(
@@ -145,7 +143,9 @@ def test_time_stop_exit_signal(trading_rules: TradingRules, rule_params: RulePar
     assert exit_signal is True
 
 
-def test_wide_intervals_suppress_entry(trading_rules: TradingRules, rule_params: RuleParams) -> None:
+def test_wide_intervals_suppress_entry(
+    trading_rules: TradingRules, rule_params: RuleParams
+) -> None:
     """Test that wide intervals (high uncertainty) suppress entry."""
     signal = trading_rules.get_entry_signal(
         rule_params,

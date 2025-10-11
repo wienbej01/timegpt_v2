@@ -464,6 +464,8 @@ class TestCalibrationEmbargoUtilities:
         assert window_start == date(2024, 1, 5)
         assert not filtered.empty
         assert filtered["ts_utc"].dt.date.max() <= embargo_cutoff
+
+
 from timegpt_v2.eval.calibration import generate_coverage_report, split_conformal, widen_intervals
 
 
@@ -539,20 +541,28 @@ class TestGenerateCoverageReport:
 
     def test_generate_coverage_report_basic(self) -> None:
         """Basic coverage report functionality."""
-        forecasts = pd.DataFrame({
-            "symbol": ["AAPL", "AAPL", "MSFT"],
-            "ts_utc": ["2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", "2024-01-01T10:00:00Z"],
-            "snapshot_utc": ["2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", "2024-01-01T10:00:00Z"],
-            "q25": [0.1, 0.2, 0.15],
-            "q50": [0.2, 0.3, 0.25],
-            "q75": [0.3, 0.4, 0.35],
-        })
+        forecasts = pd.DataFrame(
+            {
+                "symbol": ["AAPL", "AAPL", "MSFT"],
+                "ts_utc": ["2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", "2024-01-01T10:00:00Z"],
+                "snapshot_utc": [
+                    "2024-01-01T10:00:00Z",
+                    "2024-01-01T11:00:00Z",
+                    "2024-01-01T10:00:00Z",
+                ],
+                "q25": [0.1, 0.2, 0.15],
+                "q50": [0.2, 0.3, 0.25],
+                "q75": [0.3, 0.4, 0.35],
+            }
+        )
 
-        actuals = pd.DataFrame({
-            "symbol": ["AAPL", "AAPL", "MSFT"],
-            "ts_utc": ["2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", "2024-01-01T10:00:00Z"],
-            "y_true": [0.25, 0.35, 0.3],
-        })
+        actuals = pd.DataFrame(
+            {
+                "symbol": ["AAPL", "AAPL", "MSFT"],
+                "ts_utc": ["2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", "2024-01-01T10:00:00Z"],
+                "y_true": [0.25, 0.35, 0.3],
+            }
+        )
 
         report = generate_coverage_report(forecasts, actuals)
 

@@ -58,18 +58,19 @@ def synthetic_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         }
     )
 
-    snapshot_positions = [3, 5]
+    snapshot_positions = [3]
     forecasts_rows = []
     for pos in snapshot_positions:
         ts = index[pos]
         last_price = float(close_path.iloc[pos])
+        q50_offset = 0.03 if pos == 3 else 0.12
         forecasts_rows.append(
             {
                 "ts_utc": ts.isoformat(),
                 "symbol": "SYN",
                 "q25": last_price + 0.03,
-                "q50": last_price + 0.12,
-                "q75": last_price + 0.20,
+                "q50": last_price + q50_offset,
+                "q75": last_price + 0.05,
             }
         )
 
@@ -86,7 +87,7 @@ def test_grid_search_outputs_unique_hashes(
     trading_cfg = {
         "k_sigma": [0.5, 1.0],
         "s_stop": [1.0],
-        "s_take": [1.0],
+        "s_take": [1.0, 2.0],
         "time_stop_et": "15:55",
         "fees_bps": 0.5,
         "half_spread_ticks": {"SYN": 1},
@@ -104,7 +105,7 @@ def test_grid_search_outputs_unique_hashes(
 
     results = grid_search.run(forecasts, features, prices)
 
-    assert len(results) == 2
+    assert len(results) == 4
     assert results["combo_hash"].is_unique
 
     summary_paths = [
