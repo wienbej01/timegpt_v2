@@ -169,6 +169,42 @@ High-level workflow:
 
 ---
 
+## 7. Sprint 7 Additions
+
+### 7.1 Portfolio Evaluation Metrics
+- **Module:** [`src/timegpt_v2/eval/metrics_trading.py`](src/timegpt_v2/eval/metrics_trading.py:1)
+- **Key Functions:**
+  - `portfolio_sharpe()`: Computes Sharpe ratio across all symbols using equal-weighted daily returns.
+  - `portfolio_max_drawdown()`: Calculates portfolio max drawdown from daily returns.
+  - `portfolio_hit_rate()`: Aggregates hit rate across trades.
+  - `portfolio_total_pnl()`: Sums total net P&L.
+  - `per_symbol_metrics()`: Computes per-symbol KPIs (trade count, P&L, hit rate, Sharpe, max DD).
+- **Features:** Phase-filtered metrics for in-sample, OOS, stress periods.
+
+### 7.2 OOS Evaluation
+- **Module:** [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1)
+- **Key Outputs:** `eval/oos_summary.csv` with OOS-specific metrics (total trades, P&L, Sharpe, max DD, hit rate).
+- **Gates:** OOS Sharpe ≥ 0.5, hit rate ≥ 48%, net P&L > 0 enforced in evaluate command.
+- **No API Calls:** Reuses cached forecasts and backtest results.
+
+### 7.3 Cost Sensitivity Analysis
+- **Module:** [`src/timegpt_v2/backtest/aggregation.py`](src/timegpt_v2/backtest/aggregation.py:1)
+- **Key Function:** `compute_cost_scenarios()` evaluates P&L, hit rate, Sharpe at 1.0×, 1.5×, 2.0× costs.
+- **Output:** `eval/cost_sensitivity.csv` with per-multiplier metrics.
+- **Gate:** Net P&L must remain positive at 1.5× costs.
+
+### 7.4 CLI Evaluate Enhancements
+- **Module:** [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1)
+- **Key Changes:** Extended evaluate command to output portfolio metrics per phase, per-symbol metrics, and OOS summary.
+- **Outputs:** `eval/portfolio_metrics.csv`, `eval/per_symbol_metrics.csv`, `eval/oos_summary.csv`.
+
+### 7.5 Tests
+- [`tests/test_eval_metrics.py`](tests/test_eval_metrics.py:1): Added tests for portfolio functions, per-symbol metrics, and phase filtering.
+
+### 7.6 Documentation
+- [`docs/EVALUATION.md`](docs/EVALUATION.md:1): Added sections for Portfolio Evaluation, OOS Evaluation, Cost Sensitivity Analysis.
+
+---
 ## 6. Sprint 8 Additions
 
 ### 3.1 Backend Enforcement and .env Loader

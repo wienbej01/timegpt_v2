@@ -235,7 +235,7 @@ Add/extend these keys (top-level file suggestions in parentheses):
 
 ---
 
-### **Sprint 7 — Portfolio, Cost Sensitivity, OOS (no extra API)**
+### **Sprint 7 — Portfolio, Cost Sensitivity, OOS (no extra API)** ✅ COMPLETED
 
 **Goal**: Evaluate portfolio P&L; test **cost multipliers** and **OOS month**; symbol gating for live set.
 

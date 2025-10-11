@@ -31,25 +31,37 @@ Sprint 5 added forecast configuration sweeps:
 This layout enables reproducible parameter studies while keeping single-run artifacts lightweight
 and auditable.
 
-## OOS portfolio & cost sensitivity
+## Portfolio Evaluation
 
-Sprint 8 extends the evaluation stack beyond a single-sample, single-symbol view:
+Sprint 7 introduces comprehensive portfolio-level evaluation metrics:
 
-- `timegpt_v2.cli backtest` now annotates every trade with its calendar month and regime
-  (in-sample, out-of-sample, stress) using the configuration in `configs/backtest.yaml`. Portfolio
-  summaries aggregate net P&L, hit-rate, and Sharpe across tickers with equal-weight daily returns
-  and persist to `eval/portfolio_summary.csv`.
-- `timegpt_v2.cli evaluate` reads those summaries, recomputes performance under configured cost
-  multipliers, and enforces the Sprint 8 KPI gates (OOS Sharpe ≥ 0.5, net P&L > 0, hit-rate ≥ 48%,
-  and non-negative net P&L at 1.5× costs). Results are written to `eval/cost_sensitivity.csv`.
-- Forecast evaluation now produces `eval/forecast_metrics.csv` (per-symbol MAE, rMAE, rRMSE,
-  pinball loss, and PIT coverage) and `eval/pit_reliability.csv` (calibration bins), exiting
-  non-zero when the Sprint 7 coverage gates fail.
-- `timegpt_v2.reports.builder.build_report` assembles `reports/robustness_report.md`, highlighting
-  the OOS portfolio metrics alongside the cost-sensitivity table for review.
+- **Portfolio KPIs:** Aggregate performance across all symbols using equal-weighted daily returns.
+  Metrics include Sharpe ratio, maximum drawdown, hit rate, and total net P&L.
+- **Per-Symbol Metrics:** Individual symbol performance tracking with trade count, net P&L,
+  hit rate, Sharpe, and max drawdown.
+- **Phase-Based Analysis:** Metrics computed separately for in-sample, out-of-sample (OOS),
+  and stress test periods to assess robustness across regimes.
+- Outputs: `eval/portfolio_metrics.csv`, `eval/per_symbol_metrics.csv`, `eval/oos_summary.csv`.
 
-These hooks document how portfolio viability and transaction-cost robustness are tracked as the
-system moves beyond the initial calibration window.
+## OOS Evaluation
+
+Out-of-sample evaluation ensures the strategy performs on unseen data:
+
+- **OOS Months:** Configured in `configs/backtest.yaml` as `oos_months` list (e.g., ["2024-09", "2024-10"]).
+- **OOS Gates:** Portfolio must achieve Sharpe ≥ 0.5, hit rate ≥ 48%, net P&L > 0 in OOS period.
+- **OOS Summary:** Dedicated output file `eval/oos_summary.csv` with OOS-specific metrics.
+- No fitting or tuning on OOS data; evaluation only.
+
+## Cost Sensitivity Analysis
+
+Transaction cost robustness testing:
+
+- **Cost Multipliers:** Evaluate performance at 1.0×, 1.5×, and 2.0× base costs.
+- **Cost Components:** Fees (bps) + half-spread (ticks) per symbol.
+- **Sensitivity Curve:** `eval/cost_sensitivity.csv` shows how Sharpe, hit rate, and P&L
+  degrade with increasing costs.
+- **Gate:** Net P&L must remain positive at 1.5× costs.
+- Implementation: Recomputes net P&L by scaling costs in trade blotter.
 
 ## Gates & failure policy
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pandas as pd
 import numpy as np
 import pytest
 
@@ -7,6 +8,16 @@ from timegpt_v2.eval.metrics_forecast import (
     interval_width_stats,
     pinball_loss,
     pit_coverage,
+)
+from timegpt_v2.eval.metrics_trading import (
+    hit_rate,
+    max_drawdown,
+    per_symbol_metrics,
+    portfolio_hit_rate,
+    portfolio_max_drawdown,
+    portfolio_sharpe,
+    portfolio_total_pnl,
+    sharpe_ratio,
 )
 
 
@@ -77,3 +88,69 @@ def test_interval_width_stats(q25: np.ndarray, q75: np.ndarray) -> None:
     expected_widths = q75 - q25
     assert mean_width == pytest.approx(expected_widths.mean())
     assert median_width == pytest.approx(np.median(expected_widths))
+
+
+@pytest.fixture
+def sample_trades() -> pd.DataFrame:
+    """Return a sample trades DataFrame for testing."""
+    return pd.DataFrame({
+        "symbol": ["AAPL", "AAPL", "MSFT", "MSFT"],
+        "entry_ts": pd.to_datetime(["2023-01-01T10:00:00Z", "2023-01-02T10:00:00Z", "2023-01-01T10:00:00Z", "2023-01-02T10:00:00Z"]),
+        "exit_ts": pd.to_datetime(["2023-01-01T15:00:00Z", "2023-01-02T15:00:00Z", "2023-01-01T15:00:00Z", "2023-01-02T15:00:00Z"]),
+        "net_pnl": [100.0, -50.0, 200.0, 150.0],
+        "phase": ["in_sample", "oos", "in_sample", "oos"],
+    })
+
+
+@pytest.fixture
+def sample_pnl_series() -> pd.Series:
+    """Return a sample PnL series for testing."""
+    dates = pd.date_range("2023-01-01", periods=10, freq="D")
+    pnl = pd.Series([10, -5, 15, 20, -10, 5, 25, -15, 30, 10], index=dates)
+    return pnl
+
+
+def test_portfolio_sharpe(sample_trades: pd.DataFrame) -> None:
+    """Test portfolio Sharpe ratio calculation."""
+    sharpe = portfolio_sharpe(sample_trades)
+    assert isinstance(sharpe, float)
+
+
+def test_portfolio_max_drawdown(sample_trades: pd.DataFrame) -> None:
+    """Test portfolio max drawdown calculation."""
+    dd = portfolio_max_drawdown(sample_trades)
+    assert isinstance(dd, float)
+    assert dd <= 0  # Drawdown is negative or zero
+
+
+def test_portfolio_hit_rate(sample_trades: pd.DataFrame) -> None:
+    """Test portfolio hit rate calculation."""
+    hr = portfolio_hit_rate(sample_trades)
+    assert isinstance(hr, float)
+    assert 0.0 <= hr <= 1.0
+
+
+def test_portfolio_total_pnl(sample_trades: pd.DataFrame) -> None:
+    """Test portfolio total PnL calculation."""
+    pnl = portfolio_total_pnl(sample_trades)
+    assert isinstance(pnl, float)
+    assert pnl == 400.0  # Sum of all net_pnl
+
+
+def test_per_symbol_metrics(sample_trades: pd.DataFrame) -> None:
+    """Test per-symbol metrics calculation."""
+    metrics = per_symbol_metrics(sample_trades)
+    assert isinstance(metrics, pd.DataFrame)
+    assert not metrics.empty
+    expected_columns = ["symbol", "trade_count", "total_net_pnl", "hit_rate", "sharpe", "max_drawdown"]
+    assert all(col in metrics.columns for col in expected_columns)
+
+
+def test_portfolio_metrics_by_phase(sample_trades: pd.DataFrame) -> None:
+    """Test portfolio metrics filtered by phase."""
+    oos_trades = sample_trades[sample_trades["phase"] == "oos"]
+    sharpe_oos = portfolio_sharpe(oos_trades)
+    assert isinstance(sharpe_oos, float)
+    hr_oos = portfolio_hit_rate(oos_trades)
+    assert isinstance(hr_oos, float)
+    assert hr_oos == 0.5  # One win, one loss

@@ -59,7 +59,16 @@ from timegpt_v2.eval.metrics_forecast import (
     rmse,
     rrmse,
 )
-from timegpt_v2.eval.metrics_trading import hit_rate, max_drawdown, sharpe_ratio
+from timegpt_v2.eval.metrics_trading import (
+    hit_rate,
+    max_drawdown,
+    per_symbol_metrics,
+    portfolio_hit_rate,
+    portfolio_max_drawdown,
+    portfolio_sharpe,
+    portfolio_total_pnl,
+    sharpe_ratio,
+)
 from timegpt_v2.fe.base_features import build_feature_matrix
 from timegpt_v2.fe.context import FeatureContext
 from timegpt_v2.forecast.scaling import TargetScaler, TargetScalingConfig
@@ -1051,6 +1060,46 @@ def evaluate(
     trading_metrics_path = eval_dir / "bt_summary.csv"
     trading_metrics_df.to_csv(trading_metrics_path, index=False)
     typer.echo(f"Trading metrics written to {trading_metrics_path}")
+
+    # Portfolio metrics per phase
+    portfolio_metrics_rows = []
+    for phase in ["in_sample", "oos", "stress"]:
+        phase_trades = trades[trades["phase"] == phase] if "phase" in trades.columns else pd.DataFrame()
+        if not phase_trades.empty:
+            portfolio_metrics_rows.append({
+                "phase": phase,
+                "sharpe": portfolio_sharpe(phase_trades),
+                "max_drawdown": portfolio_max_drawdown(phase_trades),
+                "hit_rate": portfolio_hit_rate(phase_trades),
+                "total_pnl": portfolio_total_pnl(phase_trades),
+            })
+    if portfolio_metrics_rows:
+        portfolio_metrics_df = pd.DataFrame(portfolio_metrics_rows)
+        portfolio_metrics_path = eval_dir / "portfolio_metrics.csv"
+        portfolio_metrics_df.to_csv(portfolio_metrics_path, index=False)
+        typer.echo(f"Portfolio metrics written to {portfolio_metrics_path}")
+
+    # Per-symbol metrics
+    per_symbol_df = per_symbol_metrics(trades)
+    if not per_symbol_df.empty:
+        per_symbol_path = eval_dir / "per_symbol_metrics.csv"
+        per_symbol_df.to_csv(per_symbol_path, index=False)
+        typer.echo(f"Per-symbol metrics written to {per_symbol_path}")
+
+    # OOS summary
+    oos_trades = trades[trades["phase"] == "oos"] if "phase" in trades.columns else pd.DataFrame()
+    if not oos_trades.empty:
+        oos_summary = {
+            "total_trades": len(oos_trades),
+            "total_pnl": float(oos_trades["net_pnl"].sum()),
+            "sharpe": portfolio_sharpe(oos_trades),
+            "max_drawdown": portfolio_max_drawdown(oos_trades),
+            "hit_rate": portfolio_hit_rate(oos_trades),
+        }
+        oos_summary_df = pd.DataFrame([oos_summary])
+        oos_summary_path = eval_dir / "oos_summary.csv"
+        oos_summary_df.to_csv(oos_summary_path, index=False)
+        typer.echo(f"OOS summary written to {oos_summary_path}")
 
     cost_table = compute_cost_scenarios(
         trades,
