@@ -220,9 +220,13 @@ class ForecastCalibrator:
             return
         
         # Ensure forecasts and actuals are aligned
+        symbol_col = "symbol" if "symbol" in forecasts.columns else "unique_id"
+        ts_col = "ts_utc" if "ts_utc" in forecasts.columns else "forecast_ts"
+        merge_cols = [symbol_col, ts_col]
         merged = forecasts.merge(
-            actuals, 
-            on=["symbol", "ts_utc"], 
+            actuals,
+            left_on=merge_cols,
+            right_on=merge_cols,
             how="inner",
             suffixes=("", "_actual")
         )
@@ -299,13 +303,15 @@ class ForecastCalibrator:
         calibrated = forecasts.copy()
         quantile_cols = [col for col in forecasts.columns if col.startswith("q")]
         
-        for symbol, group in calibrated.groupby("symbol"):
+        # Handle both "symbol" and "unique_id" column names
+        symbol_col = "symbol" if "symbol" in calibrated.columns else "unique_id"
+        for symbol, group in calibrated.groupby(symbol_col):
             for quantile_col in quantile_cols:
                 if self._config.method == "affine":
-                    if (symbol in self._model.affine_models and 
+                    if (symbol in self._model.affine_models and
                         quantile_col in self._model.affine_models[symbol]):
                         model = self._model.affine_models[symbol][quantile_col]
-                        mask = calibrated["symbol"] == symbol
+                        mask = calibrated[symbol_col] == symbol
                         vals = model.apply(calibrated.loc[mask, quantile_col].values)
                         vals = np.round(vals, 10)
                         calibrated.loc[mask, quantile_col] = vals

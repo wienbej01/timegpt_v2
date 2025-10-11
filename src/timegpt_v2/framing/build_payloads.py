@@ -51,8 +51,16 @@ def build_y_df(
     snapshot_ts: pd.Timestamp,
     *,
     target_column: str = "target_log_return_1m",
+    rolling_window_days: int = 90,
 ) -> pd.DataFrame:
-    """Return the ``y`` frame for TimeGPT up to *snapshot_ts* (inclusive)."""
+    """Return the ``y`` frame for TimeGPT up to *snapshot_ts* (inclusive) with rolling window.
+
+    Args:
+        features: Feature dataframe with timestamp, symbol, and target columns
+        snapshot_ts: Snapshot timestamp for the forecast
+        target_column: Name of the target column to use as y
+        rolling_window_days: Number of days of historical data to include (default: 90)
+    """
 
     if target_column not in features.columns:
         raise KeyError(f"Target column '{target_column}' missing from features")
@@ -61,7 +69,10 @@ def build_y_df(
     working["timestamp"] = pd.to_datetime(working["timestamp"], utc=True)
     cutoff = pd.to_datetime(snapshot_ts, utc=True)
 
+    # Apply rolling window to reduce payload size
+    window_start = cutoff - pd.Timedelta(days=rolling_window_days)
     filtered = working.loc[working["timestamp"] <= cutoff].copy()
+    filtered = filtered.loc[filtered["timestamp"] >= window_start].copy()
     filtered = filtered.loc[filtered[target_column].notna()]
     if filtered.empty:
         return pd.DataFrame(columns=["unique_id", "ds", "y"])
@@ -70,6 +81,17 @@ def build_y_df(
     renamed = filtered.rename(
         columns={"symbol": "unique_id", "timestamp": "ds", target_column: "y"}
     )
+
+    # Fill gaps to make continuous time series for TimeGPT
+    renamed = (
+        renamed.set_index("ds")
+        .groupby("unique_id")
+        .resample("1min", include_groups=False)
+        .asfreq()
+        .reset_index()
+    )
+    # Forward fill y for non-trading hours to avoid NaN in target
+    renamed["y"] = renamed.groupby("unique_id")["y"].ffill()
 
     # Add deterministic features for exogenous consistency
     renamed = deterministic.add_time_features(renamed.rename(columns={"ds": "timestamp"}))

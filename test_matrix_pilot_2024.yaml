@@ -1,0 +1,108 @@
+# Pilot Backtest Test Matrix - August-October 2024
+# Configuration for comprehensive testing with costs/slippage scenarios
+
+test_metadata:
+  name: "August-November 2024 Pilot Backtest"
+  period: "2024-08-01 to 2024-11-30"
+  snapshots_per_day: 2
+  snapshot_times: ["10:00", "14:30"]
+  rolling_window_days: 90
+  partitioning: 4
+  model: "timegpt-1-long-horizon"
+
+# Cost and Slippage Scenarios
+cost_scenarios:
+  - name: "baseline"
+    fees_bps: 0.5
+    half_spread_ticks:
+      AAPL: 1
+      MSFT: 1
+      NVDA: 1
+      AMZN: 1
+      GOOGL: 1
+      TSLA: 1
+      META: 1
+    multiplier: 1.0
+
+  - name: "moderate_costs"
+    fees_bps: 0.75
+    half_spread_ticks:
+      AAPL: 2
+      MSFT: 2
+      NVDA: 2
+      AMZN: 2
+      GOOGL: 2
+      TSLA: 2
+      META: 2
+    multiplier: 1.5
+
+  - name: "high_costs"
+    fees_bps: 1.0
+    half_spread_ticks:
+      AAPL: 3
+      MSFT: 3
+      NVDA: 3
+      AMZN: 3
+      GOOGL: 3
+      TSLA: 3
+      META: 3
+    multiplier: 2.0
+
+# Parameter Grid for Trading Rules
+parameter_grid:
+  k_sigma_values: [0.5, 0.75, 1.0, 1.25]
+  s_stop_values: [1.0, 1.5, 2.0, 2.5]
+  s_take_values: [1.0, 1.5, 2.0]
+
+# Risk Management Variations
+risk_scenarios:
+  - name: "conservative"
+    max_open_per_symbol: 1
+    daily_trade_cap: 2
+    time_stop_et: "15:45"
+
+  - name: "baseline"
+    max_open_per_symbol: 1
+    daily_trade_cap: 3
+    time_stop_et: "15:55"
+
+  - name: "aggressive"
+    max_open_per_symbol: 2
+    daily_trade_cap: 5
+    time_stop_et: "15:59"
+
+# Test Execution Plan
+execution_plan:
+  phase_1: "Parameter Sensitivity Analysis"
+  phase_2: "Cost Impact Assessment"
+  phase_3: "Risk Management Validation"
+  phase_4: "Robustness Testing"
+
+# Deliverables Checklist
+deliverables:
+  - test_matrix: "Complete grid of all parameter combinations"
+  - cost_sensitivity: "Impact of different cost structures on PnL"
+  - equity_curves: "Portfolio equity curves with confidence intervals"
+  - drawdown_analysis: "Maximum drawdown and recovery analysis"
+  - wfo_results: "Walk-forward optimization results"
+  - ablation_study: "Impact of removing individual features/components"
+  - stability_metrics: "Performance stability across time periods"
+  - monte_carlo: "Monte Carlo simulation results"
+  - regime_analysis: "Performance attribution by market regime"
+  - setup_analysis: "Performance attribution by trade setup"
+  - time_analysis: "Performance attribution by time of day"
+  - outlier_autopsy: "Detailed analysis of extreme outcomes"
+
+# Success Criteria
+success_criteria:
+  oos_sharpe_threshold: 0.5
+  oos_hit_rate_threshold: 0.48
+  max_drawdown_limit: 0.15
+  cost_robustness_threshold: 0.0  # Must remain profitable at 1.5x costs
+
+# Risk Controls
+risk_controls:
+  max_position_size: 100000  # Maximum position size per trade
+  max_portfolio_exposure: 1000000  # Maximum total portfolio exposure
+  circuit_breaker_drawdown: 0.10  # Stop trading if drawdown exceeds 10%
+  min_observations_per_symbol: 50  # Minimum observations required for evaluation

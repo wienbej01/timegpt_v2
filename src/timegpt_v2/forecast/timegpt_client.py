@@ -166,9 +166,11 @@ class NixtlaTimeGPTBackend:
     @staticmethod
     def _find_column_for_quantile(row: pd.Series, quantile: float) -> str | None:
         """Return the column name matching a quantile."""
+        pct = int(round(quantile * 100))
         candidates = [
-            f"q{int(round(quantile * 100))}",
-            f"q_{int(round(quantile * 100))}",
+            f"q{pct}",
+            f"q-{pct}",
+            f"q_{pct}",
             f"{quantile}",
             f"{quantile:.2f}",
             f"{quantile:.3f}",

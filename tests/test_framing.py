@@ -138,3 +138,36 @@ def test_build_x_df_future_minutes() -> None:
         ]:
             assert column in symbol_slice.columns
             assert symbol_slice[column].notna().all()
+
+
+def test_build_y_df_fills_gaps() -> None:
+    # Create features with gaps (skip some minutes)
+    base = pd.Timestamp("2024-01-02 14:15", tz="UTC")
+    rows = []
+    symbols = ["AAPL"]
+    # Only include minutes 0, 2, 4, ..., 20
+    for minute in range(0, 21, 2):
+        ts = base + pd.Timedelta(minutes=minute)
+        rows.append(
+            {
+                "timestamp": ts,
+                "symbol": "AAPL",
+                "target_log_return_1m": 0.001 * minute,
+                "ret_1m": 0.001,
+            }
+        )
+    features = pd.DataFrame(rows)
+    snapshot = pd.Timestamp("2024-01-02 14:35", tz="UTC")  # 20 minutes later
+    y_df = build_y_df(features, snapshot)
+
+    # Check that gaps are filled
+    aapl_slice = y_df[y_df["unique_id"] == "AAPL"]
+    expected_minutes = 21  # from 0 to 20 inclusive
+    assert len(aapl_slice) == expected_minutes
+    assert aapl_slice["ds"].is_monotonic_increasing
+    # Check that ds are consecutive minutes
+    ds_diff = aapl_slice["ds"].diff().dropna()
+    assert (ds_diff == pd.Timedelta(minutes=1)).all()
+    # Check that y has NaN for missing minutes
+    assert aapl_slice["y"].isna().sum() > 0  # some NaN filled
+    assert aapl_slice["y"].notna().sum() > 0  # some data

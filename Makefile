@@ -30,16 +30,16 @@ sweep:
 
 forecast-grid:
 	python -m timegpt_v2.cli sweep \
-		--run-id dev_fg \
+		--run-id $(RUN_ID) \
 		--config-dir configs \
 		--forecast-grid configs/forecast_grid.yaml \
 		--execute \
 		--reuse-baseline \
-		--baseline-run dev
+		--baseline-run $(RUN_ID)
 
 forecast-grid-plan:
 	python -m timegpt_v2.cli sweep \
-		--run-id dev_fg \
+		--run-id $(RUN_ID) \
 		--config-dir configs \
 		--forecast-grid configs/forecast_grid.yaml \
 		--plan-only

@@ -561,7 +561,12 @@ def forecast(
 
     for snapshot_local in snapshots:
         snapshot_utc = pd.Timestamp(snapshot_local).tz_convert("UTC")
-        history = build_y_df(features, snapshot_utc, target_column=scaler.target_column)
+        history = build_y_df(
+            features,
+            snapshot_utc,
+            target_column=scaler.target_column,
+            rolling_window_days=90  # Use 90-day rolling window to reduce payload size
+        )
         if history.empty:
             continue
         latest = history.groupby("unique_id")["ds"].max()

@@ -14,7 +14,7 @@ snapshot_presets:
         end: "15:45"
     max_snapshots_per_day: 5
     horizon_min: 15
-max_snapshots_total: null
+max_snapshots_total: 10  # Short test: limit to 10 snapshots total
 max_batch_size: 100
 horizon_min: 15
 freq: "min"
@@ -22,6 +22,8 @@ backend: nixtla
 quantiles: [0.1, 0.25, 0.5, 0.75, 0.9]
 levels: [50, 80, 95]
 batch_multi_series: true
+num_partitions: 4
+model: timegpt-1-long-horizon
 retry:
   max: 3
   backoff_sec: 2

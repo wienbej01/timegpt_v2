@@ -1,4 +1,6 @@
 # TimeGPT v2 — System Technical Documentation
+**Version:** Sprint 1 (GCS Reader + Data Quality Gates)
+**Last Updated:** 2025-10-11T03:40:00Z
 **Version:** Sprint 8 (Documentation, Ops, and Handoffs)
 **Last Updated:** 2025-10-10T15:11:56Z
 **Maintainer:** Kilo Code
@@ -282,6 +284,7 @@ python -m timegpt_v2.cli sweep \
 
 | Date (UTC) | Summary | Details |
 |------------|---------|---------|
+| 2025-10-11 | Sprint 1 implementation: GCS reader + data quality gates | Implemented GCS parquet ingestion with column aliasing, ET timezone normalization, RTH filtering; added comprehensive data quality checks (schema, monotonicity, price sanity, RTH completeness, adjusted prices, gapless grid with ffill, outliers); CLI check-data command validates and cleans data, writes DQ report; all tests pass for 10 symbols (AAPL/MSFT/NVDA/TSLA/AMZN/GOOGL/META/NFLX/AMD/CRM) from July-Nov 2024. |
 | 2025-10-10 | Sprint 8 implementation: Updated docs with backend enforcement, calibration workflow, snapshot policy, horizon alignment, monitoring; added runbook for secrets/incidents, handoffs to other teams; added insufficient history check to prevent TimeGPT API errors.
 | 2025-10-10 | Sprint 5 implementation | Added forecast sweep engine, config schema, calibration metadata, documentation, tests, Make targets. |
 

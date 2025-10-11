@@ -87,7 +87,7 @@ Add/extend these keys (top-level file suggestions in parentheses):
 
 ---
 
-### **Sprint 1 — GCS Reader + Data Quality Gate (no API calls)**
+### **Sprint 1 — GCS Reader + Data Quality Gate (no API calls)** ✅ COMPLETED
 
 **Goal**: Ingest GCS parquet, enforce contracts, **gapless RTH grid**, ffill flags, DQ report.
 
