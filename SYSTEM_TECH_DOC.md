@@ -1,4 +1,8 @@
 # TimeGPT v2 — System Technical Documentation
+**Version:** Sprint 5 (Quantile-Aware Trading Rules)
+**Last Updated:** 2025-10-11T07:58:00Z
+**Version:** Sprint 4 (Calibration + Coverage Diagnostics)
+**Last Updated:** 2025-10-11T07:28:00Z
 **Version:** Sprint 3 (Framing + TimeGPT Client)
 **Last Updated:** 2025-10-11T07:28:00Z
 **Version:** Sprint 2 (Leakage-Safe Feature Engineering)
@@ -142,7 +146,30 @@ High-level workflow:
 
 ---
 
-## 5. Sprint 8 Additions
+## 5. Sprint 5 Additions
+
+### 5.1 Quantile-Aware Trading Rules
+- **Module:** [`src/timegpt_v2/trading/rules.py`](src/timegpt_v2/trading/rules.py:1)
+- **Key Changes:**
+  - Added EV(after-cost) > 0 check: Ensures expected value after costs is positive before entering trades.
+  - Added uncertainty suppression: Wide quantile intervals (q75 - q25 > 2 * sigma_5m) suppress entry to avoid high-uncertainty trades.
+  - Fixed position sizing to 1.0 unit exposure per trade.
+- **Features:** Reuses cached forecasts; no additional API calls. Enhances entry logic with risk-aware filters.
+
+### 5.2 Trading Costs
+- **Module:** [`src/timegpt_v2/trading/costs.py`](src/timegpt_v2/trading/costs.py:1)
+- **Key Functions:** `get_costs_bps()` calculates fees + half-spread in basis points.
+- **No changes:** Already implemented from prior sprints.
+
+### 5.3 Tests
+- [`tests/test_trading_rules.py`](tests/test_trading_rules.py:1): Updated tests for fixed position size (1.0/-1.0), added tests for uncertainty suppression and EV check.
+
+### 5.4 Documentation
+- [`docs/TRADING_RULES.md`](docs/TRADING_RULES.md:1): Updated with new entry conditions, EV check, uncertainty suppression, fixed sizing.
+
+---
+
+## 6. Sprint 8 Additions
 
 ### 3.1 Backend Enforcement and .env Loader
 - **Module:** [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1)
@@ -190,7 +217,7 @@ High-level workflow:
 | Calibration | [`src/timegpt_v2/eval/calibration.py`](src/timegpt_v2/eval/calibration.py:1) | `ForecastCalibrator`, `CalibrationModel`, affine + isotonic support, persistence, monotonic projection. |
 | Scaling | [`src/timegpt_v2/forecast/scaling.py`](src/timegpt_v2/forecast/scaling.py:1) | `TargetScaler`, reversible scaling across log/bp/z/log_return_15m modes. |
 | Scheduler | [`src/timegpt_v2/forecast/scheduler.py`](src/timegpt_v2/forecast/scheduler.py:1) | Snapshot presets, skip_dates, active windows, quota enforcement. |
-| Backtest | [`src/timegpt_v2/backtest/simulator.py`](src/timegpt_v2/backtest/simulator.py:1), [`src/timegpt_v2/trading/rules.py`](src/timegpt_v2/trading/rules.py:1) | Position sizing on calibrated quantiles & volatility, time/price exits, costs. |
+| Backtest | [`src/timegpt_v2/backtest/simulator.py`](src/timegpt_v2/backtest/simulator.py:1), [`src/timegpt_v2/trading/rules.py`](src/timegpt_v2/trading/rules.py:1), [`src/timegpt_v2/trading/costs.py`](src/timegpt_v2/trading/costs.py:1) | Quantile-aware entry with EV and uncertainty filters, fixed 1.0 unit sizing, time/price exits, costs. |
 | Forecast Sweeps | [`src/timegpt_v2/forecast/sweep.py`](src/timegpt_v2/forecast/sweep.py:1) | See § 2.1. |
 
 ---
@@ -314,6 +341,7 @@ python -m timegpt_v2.cli sweep \
   - Service unavailable: Log incident, alert on-call, switch to manual mode if critical.
 - **Recovery:** Re-run with valid credentials; check Nixtla status page for outages.
 - **Prevention:** Monitor API usage; implement quota alerts.
+| 2025-10-11 | Sprint 5 implementation: Quantile-Aware Trading Rules | Implemented EV(after-cost) > 0 check and uncertainty suppression using q-spread in trading rules; fixed position sizing to 1.0 unit exposure; updated tests for new logic; updated docs/TRADING_RULES.md; all tests pass including uncertainty suppression and EV validation. |
 | 2025-10-11 | Sprint 4 implementation: Calibration + Coverage Diagnostics | Implemented post-hoc quantile widening (`widen_intervals`), split-conformal prediction (`split_conformal`), and coverage reporting (`generate_coverage_report`) in calibration.py; enhanced evaluate command to generate per-symbol, per-snapshot coverage reports; updated docs/EVALUATION.md with calibration methods and gates; all tests pass including widening behavior and coverage calculations. |
 
 ---

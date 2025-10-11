@@ -44,19 +44,28 @@ class TradingRules:
         q25_return = float(q25)
         q75_return = float(q75)
 
+        # Uncertainty suppression: wide intervals indicate high uncertainty
+        spread = q75_return - q25_return
+        if spread > 2.0 * sigma_return:
+            return 0.0
+
         threshold = params.k_sigma * sigma_return
         if abs(q50_return) < threshold:
             return 0.0
 
-        def _scaled_position(mu: float) -> float:
-            raw = abs(mu) / (2.0 * threshold)
-            return float(max(0.0, min(raw, 1.0)))
-
+        signal = 0.0
         if q25_return > cost_return:
-            return _scaled_position(q50_return)
-        if q75_return < -cost_return:
-            return -_scaled_position(q50_return)
-        return 0.0
+            signal = 1.0
+        elif q75_return < -cost_return:
+            signal = -1.0
+
+        # EV(after-cost) > 0 check
+        if signal > 0 and q50_return - cost_return <= 0:
+            return 0.0
+        if signal < 0 and q50_return + cost_return >= 0:
+            return 0.0
+
+        return signal
 
     def get_exit_signal(
         self,

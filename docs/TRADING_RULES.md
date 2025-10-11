@@ -10,22 +10,23 @@ The entry rules are designed to identify trading opportunities based on the quan
 
 A long position is entered if the following conditions are met:
 
-*   The 25th percentile of the forecast (`q25`) is greater than the last price plus the trading costs in basis points.
-*   The absolute difference between the 50th percentile of the forecast (`q50`) and the last price is greater than or equal to a configurable multiple (`k_sigma`) of the 5-minute volatility (`sigma_5m`).
+*   The 25th percentile of the forecast (`q25`) is greater than the trading costs in basis points (return space).
+*   The absolute value of the 50th percentile of the forecast (`q50`) is greater than or equal to a configurable multiple (`k_sigma`) of the 5-minute volatility (`sigma_5m`).
+*   The quantile spread (`q75 - q25`) is less than or equal to 2 times the 5-minute volatility (uncertainty suppression).
+*   The expected value after costs (`q50 - cost_return`) is greater than 0.
 
-When both checks pass the position size is proportional to the strength of the signal. We scale by
-the z-score of the median forecast (`|q50-last_price| / sigma_5m`) and clip the absolute size to
-`[0, 1]` so that shallow dislocations trade smaller than pronounced ones but the strategy never
-exceeds a single unit of exposure.
+When all checks pass, the position size is 1.0 (full unit exposure).
 
 ### Short Entry
 
 A short position is entered if the following conditions are met:
 
-*   The 75th percentile of the forecast (`q75`) is less than the last price minus the trading costs in basis points.
-*   The absolute difference between the 50th percentile of the forecast (`q50`) and the last price is greater than or equal to a configurable multiple (`k_sigma`) of the 5-minute volatility (`sigma_5m`).
+*   The 75th percentile of the forecast (`q75`) is less than minus the trading costs in basis points (return space).
+*   The absolute value of the 50th percentile of the forecast (`q50`) is greater than or equal to a configurable multiple (`k_sigma`) of the 5-minute volatility (`sigma_5m`).
+*   The quantile spread (`q75 - q25`) is less than or equal to 2 times the 5-minute volatility (uncertainty suppression).
+*   The expected value after costs (`q50 + cost_return`) is less than 0.
 
-The same sizing logic applies, with the sign flipped for shorts.
+When all checks pass, the position size is -1.0 (full unit exposure).
 
 ## Exit Rules
 
@@ -53,10 +54,9 @@ All open positions are closed at a configurable time of day (`time_stop`), which
 
 The sizing of positions is determined by the following rules:
 
-*   **Uncertainty-scaled:** The magnitude of each trade is `clip(|q50-last_price| / sigma_5m, 0, 1)`,
-    meaning that barely significant moves risk less capital while large dislocations reach the full
-    unit size.
+*   **Fixed size:** Each trade is sized at 1.0 unit of exposure (full position).
 *   **Max open per symbol:** The simulator instantiates one rule engine per parameter set and never
     opens more than `max_open_per_symbol` positions per symbol simultaneously.
 *   **Daily trade cap:** `daily_trade_cap` enforces a per-symbol limit on new entries each trading
     day to keep turnover bounded.
+*   **Cooldown:** Positions cannot be re-entered immediately after exit; overlapping positions are prevented.

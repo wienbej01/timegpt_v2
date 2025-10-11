@@ -43,7 +43,7 @@ def test_long_entry_signal(trading_rules: TradingRules, rule_params: RuleParams)
         tick_size=0.01,
         symbol="AAPL",
     )
-    assert 0 < signal <= 1
+    assert signal == 1.0
 
 
 def test_short_entry_signal(trading_rules: TradingRules, rule_params: RuleParams) -> None:
@@ -58,7 +58,7 @@ def test_short_entry_signal(trading_rules: TradingRules, rule_params: RuleParams
         tick_size=0.01,
         symbol="AAPL",
     )
-    assert -1 <= signal < 0
+    assert signal == -1.0
 
 
 def test_no_entry_signal(trading_rules: TradingRules, rule_params: RuleParams) -> None:
@@ -76,33 +76,6 @@ def test_no_entry_signal(trading_rules: TradingRules, rule_params: RuleParams) -
     assert signal == 0
 
 
-def test_position_size_scales_with_uncertainty(
-    trading_rules: TradingRules, rule_params: RuleParams
-) -> None:
-    """Position size should scale with distance from midpoint."""
-    small_move = trading_rules.get_entry_signal(
-        rule_params,
-        q25=0.0045,
-        q50=0.0055,
-        q75=0.0065,
-        last_price=100.0,
-        sigma_5m=0.01,
-        tick_size=0.01,
-        symbol="AAPL",
-    )
-    large_move = trading_rules.get_entry_signal(
-        rule_params,
-        q25=0.015,
-        q50=0.02,
-        q75=0.025,
-        last_price=100.0,
-        sigma_5m=0.01,
-        tick_size=0.01,
-        symbol="AAPL",
-    )
-
-    assert 0 < small_move < 1
-    assert large_move >= small_move
 
 
 def test_long_exit_signal_take_profit(trading_rules: TradingRules, rule_params: RuleParams) -> None:
@@ -170,3 +143,48 @@ def test_time_stop_exit_signal(trading_rules: TradingRules, rule_params: RulePar
         current_time=time(16, 0),
     )
     assert exit_signal is True
+
+
+def test_wide_intervals_suppress_entry(trading_rules: TradingRules, rule_params: RuleParams) -> None:
+    """Test that wide intervals (high uncertainty) suppress entry."""
+    signal = trading_rules.get_entry_signal(
+        rule_params,
+        q25=0.015,
+        q50=0.02,
+        q75=0.045,  # spread = 0.03 > 2*0.01=0.02
+        last_price=100.0,
+        sigma_5m=0.01,
+        tick_size=0.01,
+        symbol="AAPL",
+    )
+    assert signal == 0.0
+
+
+def test_ev_check_suppresses_long(trading_rules: TradingRules, rule_params: RuleParams) -> None:
+    """Test that EV(after-cost) <= 0 suppresses long entry."""
+    signal = trading_rules.get_entry_signal(
+        rule_params,
+        q25=0.015,  # > cost
+        q50=0.0001,  # <= cost ~0.00015
+        q75=0.025,
+        last_price=100.0,
+        sigma_5m=0.01,
+        tick_size=0.01,
+        symbol="AAPL",
+    )
+    assert signal == 0.0
+
+
+def test_ev_check_suppresses_short(trading_rules: TradingRules, rule_params: RuleParams) -> None:
+    """Test that EV(after-cost) >= 0 suppresses short entry."""
+    signal = trading_rules.get_entry_signal(
+        rule_params,
+        q25=-0.015,  # < -cost
+        q50=-0.0001,  # >= -cost ~ -0.00015
+        q75=-0.025,
+        last_price=100.0,
+        sigma_5m=0.01,
+        tick_size=0.01,
+        symbol="AAPL",
+    )
+    assert signal == 0.0

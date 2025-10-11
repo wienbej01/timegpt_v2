@@ -187,7 +187,7 @@ Add/extend these keys (top-level file suggestions in parentheses):
 
 ---
 
-### **Sprint 5 — Quantile-Aware Trading Rules (no extra API)**
+### **Sprint 5 — Quantile-Aware Trading Rules (no extra API)** ✅ COMPLETED
 
 **Goal**: Translate calibrated quantiles to trades; **EV(after-cost) filter**; inventory and cooldown.
 
