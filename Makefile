@@ -43,3 +43,11 @@ forecast-grid-plan:
 		--config-dir configs \
 		--forecast-grid configs/forecast_grid.yaml \
 		--plan-only
+
+demo: ## run full demo pipeline
+	python -m timegpt_v2.cli check-data --config-dir configs --run-id demo
+	python -m timegpt_v2.cli build-features --config-dir configs --run-id demo
+	python -m timegpt_v2.cli forecast --config-dir configs --run-id demo --api-mode offline
+	python -m timegpt_v2.cli backtest --config-dir configs --run-id demo
+	python -m timegpt_v2.cli evaluate --config-dir configs --run-id demo
+	python -m timegpt_v2.cli report --config-dir configs --run-id demo

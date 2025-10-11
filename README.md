@@ -21,7 +21,7 @@
    RUN_ID=dev
    python -m timegpt_v2.cli check-data --config-dir configs --run-id "$RUN_ID"
    python -m timegpt_v2.cli build-features --config-dir configs --run-id "$RUN_ID"
-   python -m timegpt_v2.cli forecast --config-dir configs --run-id "$RUN_ID"
+   python -m timegpt_v2.cli forecast --config-dir configs --run-id "$RUN_ID" --api-mode offline
    python -m timegpt_v2.cli backtest --config-dir configs --run-id "$RUN_ID"
    python -m timegpt_v2.cli evaluate --config-dir configs --run-id "$RUN_ID"
    python -m timegpt_v2.cli report --config-dir configs --run-id "$RUN_ID"

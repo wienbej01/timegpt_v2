@@ -278,7 +278,7 @@ Add/extend these keys (top-level file suggestions in parentheses):
 
 ---
 
-### **Sprint 9 — Reporting & Final Gates**
+### **Sprint 9 — Reporting & Final Gates** ✅ COMPLETED
 
 **Goal**: One-click reports; fail-fast gates; README quickstart.
 
