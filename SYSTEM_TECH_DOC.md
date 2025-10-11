@@ -92,6 +92,29 @@ High-level workflow:
 
 ---
 
+## 3. Sprint 4 Additions
+
+### 3.1 Calibration Diagnostics
+- **Module:** [`src/timegpt_v2/eval/calibration.py`](src/timegpt_v2/eval/calibration.py:1)
+- **Key Functions:**
+  - `widen_intervals()`: Post-hoc quantile widening by multiplicative factor to increase coverage toward nominal levels.
+  - `split_conformal()`: Simple split-conformal prediction using historical residuals to adaptively widen intervals.
+  - `generate_coverage_report()`: Generates detailed coverage statistics per symbol and forecast snapshot.
+- **Features:** Reuses cached forecasts from Sprint 3; no additional API calls required. Addresses under-coverage issues with configurable widening methods.
+
+### 3.2 Evaluation Enhancements
+- **Module:** [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1)
+- **Key Changes:** `evaluate` command now generates `eval/coverage_report.csv` with per-symbol, per-snapshot coverage metrics alongside existing forecast diagnostics.
+- **Outputs:** Enhanced evaluation with coverage deltas, pinball loss, PIT coverage, and interval width statistics.
+
+### 3.3 Tests
+- [`tests/test_calibration.py`](tests/test_calibration.py:1): Added comprehensive tests for `widen_intervals`, `split_conformal`, and `generate_coverage_report` functions, ensuring correct widening behavior and coverage reporting.
+
+---
+
+## 4. Sprint 3 Additions
+---
+
 ## 4. Sprint 3 Additions
 
 ### 4.1 Framing Layer
@@ -291,6 +314,7 @@ python -m timegpt_v2.cli sweep \
   - Service unavailable: Log incident, alert on-call, switch to manual mode if critical.
 - **Recovery:** Re-run with valid credentials; check Nixtla status page for outages.
 - **Prevention:** Monitor API usage; implement quota alerts.
+| 2025-10-11 | Sprint 4 implementation: Calibration + Coverage Diagnostics | Implemented post-hoc quantile widening (`widen_intervals`), split-conformal prediction (`split_conformal`), and coverage reporting (`generate_coverage_report`) in calibration.py; enhanced evaluate command to generate per-symbol, per-snapshot coverage reports; updated docs/EVALUATION.md with calibration methods and gates; all tests pass including widening behavior and coverage calculations. |
 
 ---
 
