@@ -40,9 +40,10 @@ class TradingRules:
         cost_return = costs_bps / 10_000.0
 
         sigma_return = max(float(sigma_5m), 1e-9)
-        q50_return = float(q50) - last_price
-        q25_return = float(q25) - last_price
-        q75_return = float(q75) - last_price
+        q50_return = float(q50)
+        
+        q25_return = float(q25)
+        q75_return = float(q75)
 
         # Uncertainty suppression: wide intervals indicate high uncertainty
         spread = q75_return - q25_return

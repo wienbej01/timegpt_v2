@@ -304,6 +304,21 @@ def build_features(
 def forecast(
     config_dir: Path = CONFIG_DIR_OPTION,
     run_id: str = RUN_ID_OPTION,
+    api_mode: str = typer.Option(
+        None, "--api-mode", help="API mode (online/offline). Overrides config."
+    ),
+    max_bytes_per_call: int = typer.Option(
+        None, "--max-bytes-per-call", help="Max payload size per call. Overrides config."
+    ),
+    num_partitions: int = typer.Option(
+        None, "--num-partitions", help="Default number of partitions. Overrides config."
+    ),
+    rolling_history_days: int = typer.Option(
+        None, "--rolling-history-days", help="Rolling history days. Overrides config."
+    ),
+    unique_id_chunk_size: int = typer.Option(
+        None, "--unique-id-chunk-size", help="Hard cap on series per batch. Overrides config."
+    ),
 ) -> None:
     """Generate TimeGPT quantile forecasts."""
 
@@ -322,6 +337,19 @@ def forecast(
         raise typer.BadParameter("features.parquet must include 'timestamp' and 'symbol' columns")
 
     forecast_cfg = _load_yaml(config_dir / "forecast.yaml")
+    
+    # Override config with CLI options if provided
+    if api_mode is not None:
+        forecast_cfg["api_mode"] = api_mode
+    if max_bytes_per_call is not None:
+        forecast_cfg["max_bytes_per_call"] = max_bytes_per_call
+    if num_partitions is not None:
+        forecast_cfg["num_partitions_default"] = num_partitions
+    if rolling_history_days is not None:
+        forecast_cfg["rolling_history_days"] = rolling_history_days
+    if unique_id_chunk_size is not None:
+        forecast_cfg["unique_id_chunk_size"] = unique_id_chunk_size
+
     quantiles = tuple(float(q) for q in forecast_cfg.get("quantiles", [0.25, 0.5, 0.75]))
     horizon_base = _coerce_optional_int(forecast_cfg.get("horizon_min", 15), field="horizon_min")
     horizon = horizon_base if horizon_base is not None else 15
@@ -581,7 +609,7 @@ def forecast(
             features,
             snapshot_utc,
             target_column=scaler.target_column,
-            rolling_window_days=90,  # Use 90-day rolling window to reduce payload size
+            rolling_window_days=forecast_cfg.get("rolling_history_days", 90),
         )
         if history.empty:
             continue
@@ -590,7 +618,7 @@ def forecast(
             continue
         available_ids = sorted(str(uid) for uid in latest.index)
         # Skip snapshots with insufficient history for TimeGPT prediction intervals
-        min_samples = 25
+        min_samples = forecast_cfg.get("min_obs_subhourly", 25)
         symbol_counts = history.groupby("unique_id").size()
         if (symbol_counts < min_samples).any():
             logger.warning(
@@ -599,7 +627,8 @@ def forecast(
             )
             continue
 
-        for chunk_ids in _iter_chunks(available_ids, max_batch_size):
+        chunk_size = forecast_cfg.get("unique_id_chunk_size") or max_batch_size
+        for chunk_ids in _iter_chunks(available_ids, chunk_size):
             history_chunk = history[history["unique_id"].isin(chunk_ids)].copy()
             future_chunk = build_x_df_for_horizon(
                 features,

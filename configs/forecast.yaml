@@ -1,34 +1,46 @@
+# TimeGPT API and Batching Configuration
+api_mode: "offline"  # "offline" | "online"
+api_budget:
+  per_run: 25
+  per_day: 100
+  cooldown_sec: 1
+batch_multi_series: true
+max_bytes_per_call: 150_000_000  # Safety threshold for payload size
+num_partitions_default: null  # Optional default for num_partitions
+rolling_history_days: 40  # Cap history to control payload size
+quantiles: [0.25, 0.5, 0.75]  # Keep small to reduce response size
+min_obs_subhourly: 1008
+
+# Snapshot and Model Configuration
 snapshot_preset: baseline
 snapshot_presets:
   - name: baseline
     times: ["10:00", "14:30"]
     active_windows:
-      - start: "09:45"
-        end: "15:30"
+      - {start: "09:45", end: "15:30"}
     max_snapshots_per_day: 2
     horizon_min: 15
   - name: liquidity_profile
     times: ["09:45", "10:15", "12:00", "14:00", "15:15"]
     active_windows:
-      - start: "09:40"
-        end: "15:45"
+      - {start: "09:40", end: "15:45"}
     max_snapshots_per_day: 5
     horizon_min: 15
-max_snapshots_total: 10  # Short test: limit to 10 snapshots total
-max_batch_size: 100
+max_snapshots_total: 10
 horizon_min: 15
 freq: "min"
 backend: nixtla
-quantiles: [0.1, 0.25, 0.5, 0.75, 0.9]
-levels: [50, 80, 95]
-batch_multi_series: true
-num_partitions: 4
 model: timegpt-1-long-horizon
+levels: [50, 80, 95]
+
+# Retry and Cache Configuration
 retry:
   max: 3
   backoff_sec: 2
 cache: true
 tz: America/New_York
+
+# Event and Target Configuration
 skip_events:
   - event_fomc
   - event_cpi
@@ -36,6 +48,8 @@ target:
   mode: log_return_15m
   volatility_column: vol_ewm_60m
   bp_factor: 10000
+
+# Calibration Configuration
 calibration:
    method: affine
    min_samples: 1

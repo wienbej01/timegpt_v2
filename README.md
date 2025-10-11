@@ -34,15 +34,18 @@
 
    ```bash
    # Trading parameter sweep (k_sigma, s_stop, s_take)
-   python -m timegpt_v2.cli sweep --config-dir configs --run-id "$RUN_ID"
+   python -m timegpt_v2.cli sweep --config-dir configs --run-id "$RUN_ID" --api-mode offline
 
    # Forecast configuration sweep (snapshot presets, horizons, quantiles, calibration)
    make forecast-grid-plan  # dry-run plan
    make forecast-grid       # execute with baseline reuse
    ```
 
+   **Note on API Usage:** The `forecast` and `sweep` commands now support `--api-mode`. Use `--api-mode offline` for running sweeps and backtests without hitting the TimeGPT API, relying solely on cached forecasts. To refresh the cache, run `forecast` with `--api-mode online`.
+
 - Configuration files live in `configs/` and are the single source of truth for universe definitions,
   scheduler windows, trading rules, backtest aggregation, and forecast grid specifications.
+- The system now includes automatic **request-size controls** to prevent "payload too large" errors from the TimeGPT API. It dynamically batches symbols and can partition large requests using `num_partitions`, which may affect API usage counts.
 - `docs/` contains deeper design notes on data quality, feature engineering, forecasting, trading, evaluation, and system architecture.
 - The `Makefile` mirrors the automation used in CI; running `make fmt && make lint && make test`
   before commits keeps the project reproducible.

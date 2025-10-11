@@ -22,6 +22,7 @@ class CacheKey:
     quantiles: tuple[float, ...]
     model: str = "timegpt-1"
     levels: tuple[int, ...] = ()
+    features_hash: int = 0
 
 
 class ForecastCache:
