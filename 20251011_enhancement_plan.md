@@ -160,7 +160,7 @@ Add/extend these keys (top-level file suggestions in parentheses):
 
 ---
 
-### **Sprint 4 — Calibration + Coverage Diagnostics (reuse cache; low API)**
+### **Sprint 4 — Calibration + Coverage Diagnostics (reuse cache; low API)** ✅ COMPLETED
 
 **Goal**: Fix under-coverage. Add **post-hoc quantile widening** and simple **split-conformal** option; add **pinball loss**, PIT coverage.
 

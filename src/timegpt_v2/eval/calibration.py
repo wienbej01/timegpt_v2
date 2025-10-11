@@ -536,6 +536,85 @@ def apply_conformal_widening(
 
     return result
 
+def widen_intervals(
+    q25: np.ndarray, q50: np.ndarray, q75: np.ndarray, alpha: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Apply post-hoc quantile widening by factor alpha."""
+    # Widen intervals by multiplying the half-width by (1 + alpha)
+    half_width = (q75 - q25) / 2
+    widened_half_width = half_width * (1 + alpha)
+    new_q25 = q50 - widened_half_width
+    new_q75 = q50 + widened_half_width
+    return new_q25, q50, new_q75
+
+
+def split_conformal(
+    residuals: np.ndarray, quantiles: np.ndarray, alpha: float = 0.1
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply simple split-conformal prediction for quantiles."""
+    if len(residuals) < 2:
+        # Not enough data, return original quantiles
+        return quantiles, quantiles
+
+    # Sort residuals
+    sorted_residuals = np.sort(np.abs(residuals))
+
+    # For alpha coverage, find the (1-alpha) quantile of absolute residuals
+    n = len(sorted_residuals)
+    k = int(np.ceil((1 - alpha) * n))
+    if k >= n:
+        k = n - 1
+    if k < 0:
+        k = 0
+    conformal_width = sorted_residuals[k]
+
+    # Apply to quantiles: widen by conformal_width
+    q25_adjusted = quantiles[:, 0] - conformal_width  # Assuming quantiles is (n, 3) for q25, q50, q75
+    q75_adjusted = quantiles[:, 2] + conformal_width
+    q50_adjusted = quantiles[:, 1]  # q50 unchanged
+
+    return np.column_stack([q25_adjusted, q50_adjusted, q75_adjusted]), np.full(len(quantiles), conformal_width)
+
+
+def generate_coverage_report(
+    forecasts: pd.DataFrame, actuals: pd.DataFrame
+) -> pd.DataFrame:
+    """Generate coverage report per symbol and snapshot."""
+    if forecasts.empty or actuals.empty:
+        return pd.DataFrame()
+
+    symbol_col = "symbol" if "symbol" in forecasts.columns else "unique_id"
+    ts_col = "ts_utc" if "ts_utc" in forecasts.columns else "forecast_ts"
+
+    merged = forecasts.merge(
+        actuals, left_on=[symbol_col, ts_col], right_on=[symbol_col, ts_col], how="inner"
+    )
+
+    if merged.empty:
+        return pd.DataFrame()
+
+    # Group by symbol and snapshot
+    report_rows = []
+    for (symbol, snapshot), group in merged.groupby([symbol_col, "snapshot_utc"]):
+        if len(group) == 0:
+            continue
+
+        y_true = group["y_true"].values
+        q25 = group["q25"].values
+        q75 = group["q75"].values
+
+        coverage = np.mean((y_true >= q25) & (y_true <= q75))
+        count = len(group)
+
+        report_rows.append({
+            "symbol": symbol,
+            "snapshot_utc": snapshot,
+            "coverage": coverage,
+            "count": count,
+        })
+
+    return pd.DataFrame(report_rows)
+
 
 __all__ = [
     "reliability_curve",

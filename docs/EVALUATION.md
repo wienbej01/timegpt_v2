@@ -62,4 +62,17 @@ The evaluation pipeline includes a set of gates to ensure that the performance o
 
 ### Calibration Gates
 
+## Sprint 4: Calibration + Coverage Diagnostics
+
+Sprint 4 introduces post-hoc quantile calibration methods to address under-coverage issues:
+
+- **Post-hoc Quantile Widening (`widen_intervals`):** Applies a multiplicative factor to interval half-widths, increasing coverage toward nominal levels. Used when PIT coverage is consistently below target.
+- **Split-Conformal Prediction (`split_conformal`):** Implements a simple conformal prediction approach using historical residuals to widen intervals adaptively. Computes the conformal width as the quantile of absolute residuals and applies it symmetrically around the median forecast.
+- **Coverage Report per Symbol & Snapshot (`generate_coverage_report`):** Generates detailed coverage statistics broken down by symbol and forecast snapshot, enabling fine-grained analysis of calibration performance across time and assets.
+
+These methods work on cached forecasts from Sprint 3, ensuring no additional API calls are required. The `evaluate` command now produces `eval/coverage_report.csv` alongside existing metrics, providing comprehensive calibration diagnostics.
+
+### Calibration Gates
+
+*   **PIT Coverage:** The probability integral transform (PIT) coverage for the 25th and 75th percentiles must be within ±2% of the nominal coverage (i.e., between 48% and 52% for a 50% confidence interval).
 *   **PIT Coverage:** The probability integral transform (PIT) coverage for the 25th and 75th percentiles must be within ±2% of the nominal coverage (i.e., between 48% and 52% for a 50% confidence interval).

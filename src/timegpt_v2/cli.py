@@ -48,6 +48,7 @@ from timegpt_v2.eval.calibration import (
     enforce_quantile_monotonicity,
     filter_calibration_window,
     reliability_curve,
+    generate_coverage_report,
 )
 from timegpt_v2.eval.metrics_forecast import (
     interval_width_stats,
@@ -1014,6 +1015,15 @@ def evaluate(
 
     reliability_df = pd.DataFrame(reliability_rows)
     reliability_path = eval_dir / "pit_reliability.csv"
+    reliability_df = pd.DataFrame(reliability_rows)
+    reliability_path = eval_dir / "pit_reliability.csv"
+    reliability_df.to_csv(reliability_path, index=False)
+
+    # Generate coverage report per symbol and snapshot
+    coverage_report = generate_coverage_report(forecasts, forecasts[["symbol", "ts_utc", "y_true"]])
+    coverage_report_path = eval_dir / "coverage_report.csv"
+    coverage_report.to_csv(coverage_report_path, index=False)
+    typer.echo(f"Coverage report written to {coverage_report_path}")
     reliability_df.to_csv(reliability_path, index=False)
 
     median_rmae = float(forecast_metrics_df["rmae"].median())

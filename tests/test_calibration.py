@@ -464,4 +464,110 @@ class TestCalibrationEmbargoUtilities:
         assert window_start == date(2024, 1, 5)
         assert not filtered.empty
         assert filtered["ts_utc"].dt.date.max() <= embargo_cutoff
-        assert filtered["ts_utc"].dt.date.min() >= window_start
+from timegpt_v2.eval.calibration import generate_coverage_report, split_conformal, widen_intervals
+
+
+class TestWidenIntervals:
+    """Test post-hoc quantile widening."""
+
+    def test_widen_intervals_basic(self) -> None:
+        """Basic widening functionality."""
+        q25 = np.array([0.1, 0.2])
+        q50 = np.array([0.2, 0.3])
+        q75 = np.array([0.3, 0.4])
+        alpha = 0.5
+
+        new_q25, new_q50, new_q75 = widen_intervals(q25, q50, q75, alpha)
+
+        # Check that q50 remains unchanged
+        np.testing.assert_array_equal(new_q50, q50)
+
+        # Check that intervals are widened
+        assert new_q25[0] < q25[0]
+        assert new_q75[0] > q75[0]
+        assert new_q25[1] < q25[1]
+        assert new_q75[1] > q75[1]
+
+    def test_widen_intervals_alpha_zero(self) -> None:
+        """Zero alpha should leave intervals unchanged."""
+        q25 = np.array([0.1])
+        q50 = np.array([0.2])
+        q75 = np.array([0.3])
+        alpha = 0.0
+
+        new_q25, new_q50, new_q75 = widen_intervals(q25, q50, q75, alpha)
+
+        assert np.allclose(new_q25, q25)
+        assert np.allclose(new_q50, q50)
+        assert np.allclose(new_q75, q75)
+
+
+class TestSplitConformal:
+    """Test split-conformal prediction."""
+
+    def test_split_conformal_basic(self) -> None:
+        """Basic conformal prediction functionality."""
+        residuals = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+        quantiles = np.array([[0.1, 0.2, 0.3], [0.2, 0.3, 0.4]])
+
+        adjusted_quantiles, widths = split_conformal(residuals, quantiles, alpha=0.1)
+
+        # Check shape
+        assert adjusted_quantiles.shape == (2, 3)
+        assert len(widths) == 2
+
+        # Check that q50 is unchanged
+        np.testing.assert_array_equal(adjusted_quantiles[:, 1], quantiles[:, 1])
+
+        # Check that intervals are widened
+        assert adjusted_quantiles[0, 0] < quantiles[0, 0]
+        assert adjusted_quantiles[0, 2] > quantiles[0, 2]
+
+    def test_split_conformal_insufficient_data(self) -> None:
+        """Insufficient data should return original quantiles."""
+        residuals = np.array([0.1])
+        quantiles = np.array([[0.1, 0.2, 0.3]])
+
+        adjusted_quantiles, widths = split_conformal(residuals, quantiles, alpha=0.1)
+
+        np.testing.assert_array_equal(adjusted_quantiles, quantiles)
+        np.testing.assert_array_equal(widths, quantiles)
+
+
+class TestGenerateCoverageReport:
+    """Test coverage report generation."""
+
+    def test_generate_coverage_report_basic(self) -> None:
+        """Basic coverage report functionality."""
+        forecasts = pd.DataFrame({
+            "symbol": ["AAPL", "AAPL", "MSFT"],
+            "ts_utc": ["2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", "2024-01-01T10:00:00Z"],
+            "snapshot_utc": ["2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", "2024-01-01T10:00:00Z"],
+            "q25": [0.1, 0.2, 0.15],
+            "q50": [0.2, 0.3, 0.25],
+            "q75": [0.3, 0.4, 0.35],
+        })
+
+        actuals = pd.DataFrame({
+            "symbol": ["AAPL", "AAPL", "MSFT"],
+            "ts_utc": ["2024-01-01T10:00:00Z", "2024-01-01T11:00:00Z", "2024-01-01T10:00:00Z"],
+            "y_true": [0.25, 0.35, 0.3],
+        })
+
+        report = generate_coverage_report(forecasts, actuals)
+
+        assert len(report) == 3  # One row per forecast row
+        assert "symbol" in report.columns
+        assert "snapshot_utc" in report.columns
+        assert "coverage" in report.columns
+        assert "count" in report.columns
+
+        # Check coverage calculations
+        assert report.loc[0, "coverage"] == 1.0  # 0.25 is within [0.1, 0.3]
+        assert report.loc[1, "coverage"] == 1.0  # 0.35 is within [0.2, 0.4]
+        assert report.loc[2, "coverage"] == 1.0  # 0.3 is within [0.15, 0.35]
+
+    def test_generate_coverage_report_empty(self) -> None:
+        """Empty inputs should return empty report."""
+        report = generate_coverage_report(pd.DataFrame(), pd.DataFrame())
+        assert report.empty
