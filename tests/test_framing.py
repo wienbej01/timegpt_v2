@@ -63,20 +63,43 @@ def test_build_y_df_shapes_and_monotonicity() -> None:
 
     # Check that deterministic features are included
     deterministic_features = [
-        "minute_of_day", "minute_index", "minute_progress",
-        "fourier_sin_1", "fourier_cos_1", "fourier_sin_2", "fourier_cos_2",
-        "fourier_sin_3", "fourier_cos_3", "session_open", "session_lunch",
-        "session_power", "day_of_week", "is_month_end"
+        "minute_of_day",
+        "minute_index",
+        "minute_progress",
+        "fourier_sin_1",
+        "fourier_cos_1",
+        "fourier_sin_2",
+        "fourier_cos_2",
+        "fourier_sin_3",
+        "fourier_cos_3",
+        "session_open",
+        "session_lunch",
+        "session_power",
+        "day_of_week",
+        "is_month_end",
     ]
     for col in deterministic_features:
         assert col in y_df.columns
 
     # Check that static features are included
     static_features = [
-        "ret_1m", "ret_5m", "ret_15m", "ret_30m", "rv_5m", "rv_15m", "rv_30m",
-        "ret_skew_15m", "ret_kurt_15m", "vol_parkinson_30m", "vol_garman_klass_30m",
-        "vwap_30m", "vwap_trend_5m", "vol_5m_norm", "volume_percentile_20d",
-        "range_pct", "signed_volume_5m"
+        "ret_1m",
+        "ret_5m",
+        "ret_15m",
+        "ret_30m",
+        "rv_5m",
+        "rv_15m",
+        "rv_30m",
+        "ret_skew_15m",
+        "ret_kurt_15m",
+        "vol_parkinson_30m",
+        "vol_garman_klass_30m",
+        "vwap_30m",
+        "vwap_trend_5m",
+        "vol_5m_norm",
+        "volume_percentile_20d",
+        "range_pct",
+        "signed_volume_5m",
     ]
     for col in static_features:
         assert col in y_df.columns
@@ -85,18 +108,6 @@ def test_build_y_df_shapes_and_monotonicity() -> None:
         assert not symbol_slice.empty
         assert symbol_slice["ds"].is_monotonic_increasing
         assert symbol_slice["ds"].iloc[-1] == snapshot
-
-
-def test_build_y_df_log_return_15m() -> None:
-    features = _sample_features()
-    snapshot = pd.Timestamp("2024-01-02 14:30", tz="UTC")
-    y_df = build_y_df(features, snapshot, target_column="target_log_return_15m")
-
-    assert not y_df.empty
-    for symbol in ["AAPL", "MSFT"]:
-        symbol_slice = y_df[y_df["unique_id"] == symbol]
-        assert symbol_slice["ds"].iloc[-1] == snapshot
-        assert symbol_slice["y"].notna().all()
 
 
 def test_build_y_df_log_return_15m() -> None:
@@ -144,7 +155,6 @@ def test_build_y_df_fills_gaps() -> None:
     # Create features with gaps (skip some minutes)
     base = pd.Timestamp("2024-01-02 14:15", tz="UTC")
     rows = []
-    symbols = ["AAPL"]
     # Only include minutes 0, 2, 4, ..., 20
     for minute in range(0, 21, 2):
         ts = base + pd.Timedelta(minutes=minute)
@@ -168,6 +178,6 @@ def test_build_y_df_fills_gaps() -> None:
     # Check that ds are consecutive minutes
     ds_diff = aapl_slice["ds"].diff().dropna()
     assert (ds_diff == pd.Timedelta(minutes=1)).all()
-    # Check that y has NaN for missing minutes
-    assert aapl_slice["y"].isna().sum() > 0  # some NaN filled
-    assert aapl_slice["y"].notna().sum() > 0  # some data
+    # Check that gaps are forward-filled (no NaNs in y for TimeGPT compatibility)
+    assert aapl_slice["y"].isna().sum() == 0  # all gaps filled
+    assert aapl_slice["y"].notna().sum() == expected_minutes  # all minutes have data

@@ -36,7 +36,7 @@ def reliability_curve(
 @dataclass(frozen=True)
 class CalibrationConfig:
     """Configuration for forecast calibration."""
-    
+
     method: str = "affine"  # "affine", "isotonic", or "none"
     min_samples: int = 50
     calibration_window_days: int = 30
@@ -44,23 +44,27 @@ class CalibrationConfig:
     conformal_fallback: bool = False
     pit_deviation_threshold: float = 0.03
     conformal_window: int = 50
-    
+
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object] | None) -> CalibrationConfig:
         if payload is None:
             return cls()
-        
+
         method = str(payload.get("method", cls.method)).lower()
         if method not in {"affine", "isotonic", "none"}:
             raise ValueError("calibration.method must be one of: affine, isotonic, none")
-        
+
         min_samples = int(payload.get("min_samples", cls.min_samples))
-        calibration_window_days = int(payload.get("calibration_window_days", cls.calibration_window_days))
+        calibration_window_days = int(
+            payload.get("calibration_window_days", cls.calibration_window_days)
+        )
         model_path = str(payload.get("model_path", cls.model_path))
         conformal_fallback = bool(payload.get("conformal_fallback", cls.conformal_fallback))
-        pit_deviation_threshold = float(payload.get("pit_deviation_threshold", cls.pit_deviation_threshold))
+        pit_deviation_threshold = float(
+            payload.get("pit_deviation_threshold", cls.pit_deviation_threshold)
+        )
         conformal_window = int(payload.get("conformal_window", cls.conformal_window))
-        
+
         return cls(
             method=method,
             min_samples=min_samples,
@@ -75,16 +79,16 @@ class CalibrationConfig:
 @dataclass
 class AffineCalibration:
     """Per-symbol affine calibration parameters."""
-    
+
     slope: float = 1.0
     intercept: float = 0.0
     n_samples: int = 0
     last_updated: str = ""
-    
+
     def apply(self, values: np.ndarray) -> np.ndarray:
         """Apply affine transformation."""
         return self.slope * values + self.intercept
-    
+
     def inverse(self, values: np.ndarray) -> np.ndarray:
         """Inverse affine transformation."""
         if abs(self.slope) < 1e-10:
@@ -95,16 +99,16 @@ class AffineCalibration:
 @dataclass
 class CalibrationModel:
     """Container for calibration models per symbol and quantile."""
-    
+
     affine_models: dict[str, dict[str, AffineCalibration]] = field(default_factory=dict)
     isotonic_models: dict[str, dict[str, IsotonicRegression]] = field(default_factory=dict)
     config: CalibrationConfig = field(default_factory=CalibrationConfig)
-    
+
     def save(self, path: str | Path) -> None:
         """Save calibration parameters to disk."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Only save affine models (isotonic models are not easily serializable)
         serializable_data = {
             "config": {
@@ -116,9 +120,9 @@ class CalibrationModel:
                 "pit_deviation_threshold": self.config.pit_deviation_threshold,
                 "conformal_window": self.config.conformal_window,
             },
-            "affine_models": {}
+            "affine_models": {},
         }
-        
+
         for symbol, quantile_models in self.affine_models.items():
             serializable_data["affine_models"][symbol] = {}
             for quantile, model in quantile_models.items():
@@ -128,20 +132,20 @@ class CalibrationModel:
                     "n_samples": model.n_samples,
                     "last_updated": model.last_updated,
                 }
-        
+
         with path.open("w", encoding="utf-8") as f:
             json.dump(serializable_data, f, indent=2)
-    
+
     @classmethod
     def load(cls, path: str | Path) -> CalibrationModel:
         """Load calibration parameters from disk."""
         path = Path(path)
         if not path.exists():
             return cls()
-        
+
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        
+
         config_payload = data.get("config", {})
         config = CalibrationConfig(
             method=str(config_payload.get("method", "affine")),
@@ -152,9 +156,9 @@ class CalibrationModel:
             pit_deviation_threshold=float(config_payload.get("pit_deviation_threshold", 0.03)),
             conformal_window=int(config_payload.get("conformal_window", 50)),
         )
-        
+
         model = cls(config=config)
-        
+
         for symbol, quantile_models in data.get("affine_models", {}).items():
             model.affine_models[symbol] = {}
             for quantile, model_data in quantile_models.items():
@@ -164,7 +168,7 @@ class CalibrationModel:
                     n_samples=model_data["n_samples"],
                     last_updated=model_data["last_updated"],
                 )
-        
+
         return model
 
 
@@ -208,125 +212,129 @@ def filter_calibration_window(
 
 class ForecastCalibrator:
     """Calibrates forecast quantiles using per-symbol affine or isotonic regression."""
-    
+
     def __init__(self, config: CalibrationConfig) -> None:
         self._config = config
         # Initialize empty model; loading deferred to load()
         self._model = CalibrationModel(config=config)
-    
+
     def fit(self, forecasts: pd.DataFrame, actuals: pd.DataFrame) -> None:
         """Fit calibration models using historical forecasts and actuals."""
         if self._config.method == "none":
             return
-        
+
         # Ensure forecasts and actuals are aligned
         symbol_col = "symbol" if "symbol" in forecasts.columns else "unique_id"
         ts_col = "ts_utc" if "ts_utc" in forecasts.columns else "forecast_ts"
         merge_cols = [symbol_col, ts_col]
         merged = forecasts.merge(
-            actuals,
-            left_on=merge_cols,
-            right_on=merge_cols,
-            how="inner",
-            suffixes=("", "_actual")
+            actuals, left_on=merge_cols, right_on=merge_cols, how="inner", suffixes=("", "_actual")
         )
-        
+
         if merged.empty:
             raise ValueError("No overlapping data between forecasts and actuals")
-        
+
         # Get quantile columns
         quantile_cols = [col for col in forecasts.columns if col.startswith("q")]
-        
-        for symbol, group in merged.groupby("symbol"):
+
+        for _symbol, group in merged.groupby("symbol"):
             if self._config.method != "affine" and len(group) < self._config.min_samples:
                 continue
-            
+
             y_true = group["y_true"].values
-            
+
             for quantile_col in quantile_cols:
                 y_pred = group[quantile_col].values
-                
+
                 # Remove NaN values
                 valid_mask = ~(np.isnan(y_true) | np.isnan(y_pred))
                 if self._config.method != "affine" and valid_mask.sum() < self._config.min_samples:
                     continue
-                
+
                 y_true_valid = y_true[valid_mask]
                 y_pred_valid = y_pred[valid_mask]
-                
+
                 # Affine calibration requires at least 1 sample
                 if self._config.method == "affine" and len(y_true_valid) < 1:
                     continue
-                    
+
                 if self._config.method == "affine":
-                    self._fit_affine(symbol, quantile_col, y_true_valid, y_pred_valid)
+                    self._fit_affine(_symbol, quantile_col, y_true_valid, y_pred_valid)
                 elif self._config.method == "isotonic":
                     self._fit_isotonic(symbol, quantile_col, y_true_valid, y_pred_valid)
-    
-    def _fit_affine(self, symbol: str, quantile_col: str, y_true: np.ndarray, y_pred: np.ndarray) -> None:
+
+    def _fit_affine(
+        self, symbol: str, quantile_col: str, y_true: np.ndarray, y_pred: np.ndarray
+    ) -> None:
         """Fit affine calibration for a specific symbol and quantile."""
         # Simple linear regression (y_true = slope * y_pred + intercept)
         lr = LinearRegression()
         lr.fit(y_pred.reshape(-1, 1), y_true)
-        
+
         slope = float(lr.coef_[0])
         intercept = float(lr.intercept_)
-        
+
         # Store the calibration parameters
         if symbol not in self._model.affine_models:
             self._model.affine_models[symbol] = {}
-        
+
         self._model.affine_models[symbol][quantile_col] = AffineCalibration(
             slope=slope,
             intercept=intercept,
             n_samples=len(y_true),
             last_updated=pd.Timestamp.now().isoformat(),
         )
-    
-    def _fit_isotonic(self, symbol: str, quantile_col: str, y_true: np.ndarray, y_pred: np.ndarray) -> None:
+
+    def _fit_isotonic(
+        self, symbol: str, quantile_col: str, y_true: np.ndarray, y_pred: np.ndarray
+    ) -> None:
         """Fit isotonic regression calibration for a specific symbol and quantile."""
         # Isotonic regression to ensure monotonicity
-        ir = IsotonicRegression(out_of_bounds='clip')
+        ir = IsotonicRegression(out_of_bounds="clip")
         ir.fit(y_pred, y_true)
-        
+
         # Store the calibration model
         if symbol not in self._model.isotonic_models:
             self._model.isotonic_models[symbol] = {}
-        
+
         self._model.isotonic_models[symbol][quantile_col] = ir
-    
+
     def apply(self, forecasts: pd.DataFrame) -> pd.DataFrame:
         """Apply calibration to forecasts."""
         if self._config.method == "none":
             return forecasts.copy()
-        
+
         calibrated = forecasts.copy()
         quantile_cols = [col for col in forecasts.columns if col.startswith("q")]
-        
+
         # Handle both "symbol" and "unique_id" column names
         symbol_col = "symbol" if "symbol" in calibrated.columns else "unique_id"
-        for symbol, group in calibrated.groupby(symbol_col):
+        for _symbol, group in calibrated.groupby(symbol_col):
             for quantile_col in quantile_cols:
                 if self._config.method == "affine":
-                    if (symbol in self._model.affine_models and
-                        quantile_col in self._model.affine_models[symbol]):
-                        model = self._model.affine_models[symbol][quantile_col]
-                        mask = calibrated[symbol_col] == symbol
+                    if (
+                        _symbol in self._model.affine_models
+                        and quantile_col in self._model.affine_models[_symbol]
+                    ):
+                        model = self._model.affine_models[_symbol][quantile_col]
+                        mask = calibrated[symbol_col] == _symbol
                         vals = model.apply(calibrated.loc[mask, quantile_col].values)
                         vals = np.round(vals, 10)
                         calibrated.loc[mask, quantile_col] = vals
-                
+
                 elif self._config.method == "isotonic":
-                    if (symbol in self._model.isotonic_models and 
-                        quantile_col in self._model.isotonic_models[symbol]):
+                    if (
+                        symbol in self._model.isotonic_models
+                        and quantile_col in self._model.isotonic_models[symbol]
+                    ):
                         model = self._model.isotonic_models[symbol][quantile_col]
                         mask = calibrated["symbol"] == symbol
                         calibrated.loc[mask, quantile_col] = model.predict(
                             calibrated.loc[mask, quantile_col].values
                         )
-        
+
         return calibrated
-    
+
     def save(self) -> None:
         """Save calibration models to disk."""
         self._model.save(self._config.model_path)
@@ -337,44 +345,49 @@ class ForecastCalibrator:
         loaded = Path(self._config.model_path).exists()
         self._model = model
         return loaded
-    
+
     def get_calibration_stats(self) -> pd.DataFrame:
         """Get statistics about fitted calibration models."""
         rows = []
-        
+
         for symbol, quantile_models in self._model.affine_models.items():
             for quantile, model in quantile_models.items():
-                rows.append({
-                    "symbol": symbol,
-                    "quantile": quantile,
-                    "method": "affine",
-                    "slope": model.slope,
-                    "intercept": model.intercept,
-                    "n_samples": model.n_samples,
-                    "last_updated": model.last_updated,
-                })
-        
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "quantile": quantile,
+                        "method": "affine",
+                        "slope": model.slope,
+                        "intercept": model.intercept,
+                        "n_samples": model.n_samples,
+                        "last_updated": model.last_updated,
+                    }
+                )
+
         for symbol, quantile_models in self._model.isotonic_models.items():
             for quantile in quantile_models.keys():
-                rows.append({
-                    "symbol": symbol,
-                    "quantile": quantile,
-                    "method": "isotonic",
-                    "slope": np.nan,
-                    "intercept": np.nan,
-                    "n_samples": np.nan,
-                    "last_updated": np.nan,
-                })
-        
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "quantile": quantile,
+                        "method": "isotonic",
+                        "slope": np.nan,
+                        "intercept": np.nan,
+                        "n_samples": np.nan,
+                        "last_updated": np.nan,
+                    }
+                )
+
         return pd.DataFrame(rows)
 
 
 def enforce_quantile_monotonicity(forecasts: pd.DataFrame, logger=None) -> pd.DataFrame:
     """Enforce quantile monotonicity using isotonic regression."""
     import logging
+
     if logger is None:
         logger = logging.getLogger(__name__)
-    
+
     if forecasts.empty:
         return forecasts.copy()
 
@@ -384,28 +397,29 @@ def enforce_quantile_monotonicity(forecasts: pd.DataFrame, logger=None) -> pd.Da
 
     result = forecasts.copy()
     quantiles = [float(col[1:]) / 100 for col in quantile_cols]  # q10 -> 0.1, etc.
-    
+
     violations_detected = 0
     total_rows = len(result)
 
     for idx, row in result.iterrows():
         values = [row[col] for col in quantile_cols]
-        
+
         # Check for monotonicity violations before correction
         for i in range(1, len(values)):
-            if values[i] < values[i-1]:
+            if values[i] < values[i - 1]:
                 violations_detected += 1
                 if violations_detected <= 5:  # Log first 5 violations for debugging
                     logger.warning(
                         "Quantile monotonicity violation detected at row %s: %s",
-                        idx, 
-                        {col: val for col, val in zip(quantile_cols, values, strict=False)}
+                        idx,
+                        {col: val for col, val in zip(quantile_cols, values, strict=False)},
                     )
                 break
-        
+
         # Use isotonic regression to enforce monotonicity
         from sklearn.isotonic import IsotonicRegression
-        ir = IsotonicRegression(out_of_bounds='clip')
+
+        ir = IsotonicRegression(out_of_bounds="clip")
         ir.fit(quantiles, values)
         monotonic_values = ir.predict(quantiles)
         for col, val in zip(quantile_cols, monotonic_values, strict=False):
@@ -414,9 +428,11 @@ def enforce_quantile_monotonicity(forecasts: pd.DataFrame, logger=None) -> pd.Da
     if violations_detected > 0:
         logger.info(
             "Quantile monotonicity: detected %d violations out of %d rows (%.1f%%)",
-            violations_detected, total_rows, 100.0 * violations_detected / total_rows
+            violations_detected,
+            total_rows,
+            100.0 * violations_detected / total_rows,
         )
-    
+
     return result
 
 
@@ -467,9 +483,7 @@ def apply_conformal_widening(
     if forecasts_std["_ts"].isna().all() or actuals_std.empty:
         return forecasts.copy()
 
-    merged = forecasts_std[
-        ["_row", "_symbol", "_ts", "q25", "q50", "q75"]
-    ].merge(
+    merged = forecasts_std[["_row", "_symbol", "_ts", "q25", "q50", "q75"]].merge(
         actuals_std[["_symbol", "_ts", "y_true"]],
         on=["_symbol", "_ts"],
         how="inner",
@@ -479,10 +493,12 @@ def apply_conformal_widening(
         return forecasts.copy()
 
     merged = merged.sort_values(["_symbol", "_ts"])
-    merged["pit_covered"] = (merged["q25"] <= merged["y_true"]) & (merged["y_true"] <= merged["q75"])
+    merged["pit_covered"] = (merged["q25"] <= merged["y_true"]) & (
+        merged["y_true"] <= merged["q75"]
+    )
 
     adjustments: list[pd.Series] = []
-    for symbol, group in merged.groupby("_symbol", sort=False):
+    for _symbol, group in merged.groupby("_symbol", sort=False):
         coverage = float(group["pit_covered"].mean())
         pit_deviation = abs(coverage - 0.5)
         if pit_deviation <= pit_deviation_threshold:

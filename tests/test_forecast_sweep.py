@@ -66,7 +66,9 @@ def test_forecast_grid_search_plan_only(tmp_path: Path, monkeypatch: pytest.Monk
         "target_modes": ["log_return"],
         "calibration_methods": ["none", "affine"],
     }
-    spec = ForecastGridSpec.from_mapping(spec_payload, base_config=_load_yaml(base_config_dir / "forecast.yaml"))
+    spec = ForecastGridSpec.from_mapping(
+        spec_payload, base_config=_load_yaml(base_config_dir / "forecast.yaml")
+    )
 
     invoked = {"forecast": 0, "backtest": 0, "evaluate": 0}
 
@@ -195,10 +197,13 @@ def test_forecast_grid_scoreboard(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     scoreboard = pd.read_csv(scoreboard_path)
     assert "composite_score" in scoreboard.columns
-    assert list(scoreboard["run_id"]) == scoreboard.sort_values("composite_score", ascending=False)["run_id"].tolist()
+    assert (
+        list(scoreboard["run_id"])
+        == scoreboard.sort_values("composite_score", ascending=False)["run_id"].tolist()
+    )
 
     assert "rank" in plan.columns
-    ranks = plan.dropna(subset=["rank"]).sort_values("rank")["rank"].tolist()
+    plan.dropna(subset=["rank"]).sort_values("rank")["rank"].tolist()
 
 
 def test_grid_plan_integrity(tmp_path: Path) -> None:
@@ -236,20 +241,28 @@ def test_grid_plan_integrity(tmp_path: Path) -> None:
         evaluate_cmd=lambda **_: None,
     )
 
-    plan = search.run(execute=False, reuse_baseline_artifacts=False)
-    
+    search.run(execute=False, reuse_baseline_artifacts=False)
+
     # Test plan.csv integrity
     plan_path = tmp_path / "output" / "plan.csv"
     assert plan_path.exists()
     plan_df = pd.read_csv(plan_path)
-    
+
     required_columns = [
-        "order", "run_id", "combo_hash", "snapshot_preset", "horizon",
-        "quantiles", "levels", "target_mode", "calibration_method", "config_path"
+        "order",
+        "run_id",
+        "combo_hash",
+        "snapshot_preset",
+        "horizon",
+        "quantiles",
+        "levels",
+        "target_mode",
+        "calibration_method",
+        "config_path",
     ]
     for col in required_columns:
         assert col in plan_df.columns, f"Missing required column: {col}"
-    
+
     # Test scoreboard.csv integrity (should exist even if empty)
     scoreboard_path = tmp_path / "output" / "scoreboard.csv"
     if scoreboard_path.exists():

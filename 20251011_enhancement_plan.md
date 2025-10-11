@@ -129,29 +129,29 @@ Add/extend these keys (top-level file suggestions in parentheses):
 
 ---
 
-### **Sprint 3 — Framing + TimeGPT Client (API minimal, cache on)**
+### **Sprint 3 — Framing + TimeGPT Client (API minimal, cache on)** ✅ COMPLETED
 
 **Goal**: Build `Y_df` and `X_df` per snapshot; **single batched multi-series TimeGPT call** per snapshot; **cache everything**.
 
 **API minimization**
-- Start with **whitelist: [AAPL]**.  
-- **snapshots_et: ["10:30","14:30"]**, **horizon_min: 10** only.  
-- `api_budget.per_run = 6` (example); batch all whitelisted symbols in **one** call per snapshot/day.  
+- Start with **whitelist: [AAPL]**.
+- **snapshots_et: ["10:30","14:30"]**, **horizon_min: 10** only.
+- `api_budget.per_run = 6` (example); batch all whitelisted symbols in **one** call per snapshot/day.
 - If cache hit for `(snapshot,h)`, **no call**.
 
 **Deliverables**
-- `framing/build_payloads.py`:  
-  - `build_y_df(symbol, t_snapshot)` → `unique_id, ds, y` (history window from config; rolling).  
-  - `build_x_df_for_horizon(symbol, t_snapshot, h)` → future deterministic features.  
-- `forecast/timegpt_client.py`:  
-  - `forecast_batch(unique_ids, Y_df, X_df, freq="min", h, quantiles)`  
-  - Logs per snapshot: series count, h, quantiles, **calls_used**.  
-  - Cache write: `forecasts/quantiles.csv` (append) and per-snapshot JSON with the hash key.  
+- `framing/build_payloads.py`:
+  - `build_y_df(symbol, t_snapshot)` → `unique_id, ds, y` (history window from config; rolling).
+  - `build_x_df_for_horizon(symbol, t_snapshot, h)` → future deterministic features.
+- `forecast/timegpt_client.py`:
+  - `forecast_batch(unique_ids, Y_df, X_df, freq="min", h, quantiles)`
+  - Logs per snapshot: series count, h, quantiles, **calls_used**.
+  - Cache write: `forecasts/quantiles.csv` (append) and per-snapshot JSON with the hash key.
 - CLI `forecast`: iterates snapshots; enforces **Budget Manager**; supports `api_mode=offline|online`.
 
 **Tests**
-- Offline mode uses cache only; zero calls.  
-- Online mode: ledger increments by **1 per snapshot**; abort when exceeding per_run.  
+- Offline mode uses cache only; zero calls.
+- Online mode: ledger increments by **1 per snapshot**; abort when exceeding per_run.
 - Quantiles present and not all equal; shapes correct.
 
 **Docs**: `FORECASTING.md` (scheduler, horizons, window).

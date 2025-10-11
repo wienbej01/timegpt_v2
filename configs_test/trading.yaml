@@ -1,0 +1,23 @@
+k_sigma: [0.5, 0.75, 1.0]
+s_stop: [1.0, 1.5, 2.0]
+s_take: [1.0]
+time_stop_et: "15:55"
+fees_bps: 0.5
+half_spread_ticks:
+  AAPL: 1
+  MSFT: 1
+  NVDA: 1
+  TSLA: 1
+  AMZN: 1
+  GOOGL: 1
+  META: 1
+  NFLX: 1
+  AMD: 1
+  CRM: 1
+max_open_per_symbol: 1
+daily_trade_cap: 3
+no_trade:
+  earnings: true
+  fomc: true
+  cpi: true
+  buffer_min: 10

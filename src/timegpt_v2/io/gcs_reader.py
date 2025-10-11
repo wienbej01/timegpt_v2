@@ -99,7 +99,7 @@ class GCSReader:
         print("\n=== FORENSIC AUDIT: GCS READER - read_universe ===")
         print(f"Reading tickers: {list(tickers)}")
         print(f"Date range: {start} to {end}")
-        
+
         frames = []
         for ticker in tickers:
             frame = self.read_range(ticker, start, end)
@@ -111,32 +111,40 @@ class GCSReader:
                     print(f"  !!! WARNING: {dup_count} duplicates found in {ticker} data !!!")
                     dup_mask = frame.duplicated(subset=["symbol", "timestamp"], keep=False)
                     print("  First few duplicates:")
-                    print(frame[dup_mask].sort_values("timestamp").head(10)[["symbol", "timestamp", "open", "close"]])
+                    print(
+                        frame[dup_mask]
+                        .sort_values("timestamp")
+                        .head(10)[["symbol", "timestamp", "open", "close"]]
+                    )
                 frames.append(frame)
-        
+
         if not frames:
             return pd.DataFrame()
-        
+
         print(f"\nCombining {len(frames)} ticker frames...")
         combined = pd.concat(frames, ignore_index=True)
         print(f"Combined frame: {len(combined)} rows")
-        
+
         # Check for duplicates after concatenation
         dup_after_concat = combined.duplicated(subset=["symbol", "timestamp"]).sum()
         print(f"Duplicates after concatenation: {dup_after_concat}")
-        
+
         result = combined.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
-        
+
         # Final check
         dup_final = result.duplicated(subset=["symbol", "timestamp"]).sum()
         print(f"Duplicates in final result: {dup_final}")
-        
+
         if dup_final > 0:
             print("\n!!! DUPLICATES FOUND IN read_universe OUTPUT !!!")
             dup_mask = result.duplicated(subset=["symbol", "timestamp"], keep=False)
             print("First 20 duplicate rows:")
-            print(result[dup_mask].sort_values(["symbol", "timestamp"]).head(20)[["symbol", "timestamp", "open", "close"]])
-        
+            print(
+                result[dup_mask]
+                .sort_values(["symbol", "timestamp"])
+                .head(20)[["symbol", "timestamp", "open", "close"]]
+            )
+
         return result
 
     def _join_path(self, relative: str) -> str:
@@ -186,8 +194,10 @@ class GCSReader:
             renamed["symbol"] = ticker_str
 
         timestamps = renamed["timestamp"]
-        if self._config.skip_timestamp_normalization and pd.api.types.is_datetime64_any_dtype(timestamps):
-            if hasattr(timestamps, 'dt') and timestamps.dt.tz is not None:
+        if self._config.skip_timestamp_normalization and pd.api.types.is_datetime64_any_dtype(
+            timestamps
+        ):
+            if hasattr(timestamps, "dt") and timestamps.dt.tz is not None:
                 renamed["timestamp"] = timestamps.dt.tz_convert(ET_ZONE)
             else:
                 renamed["timestamp"] = timestamps.dt.tz_localize(ET_ZONE)
@@ -195,7 +205,7 @@ class GCSReader:
             converted = pd.to_datetime(timestamps, unit="ms", utc=True)
             renamed["timestamp"] = converted.dt.tz_convert(ET_ZONE)
         elif pd.api.types.is_datetime64_any_dtype(timestamps):
-            if hasattr(timestamps, 'dt') and timestamps.dt.tz is not None:
+            if hasattr(timestamps, "dt") and timestamps.dt.tz is not None:
                 renamed["timestamp"] = timestamps.dt.tz_convert(ET_ZONE)
             else:
                 renamed["timestamp"] = timestamps.dt.tz_localize(ET_ZONE)
@@ -218,7 +228,7 @@ class GCSReader:
                     renamed["timestamp"] = converted
                 else:
                     raise
-        
+
         renamed = _filter_rth(renamed)
         renamed = renamed.sort_values("timestamp").reset_index(drop=True)
         return renamed
@@ -226,12 +236,12 @@ class GCSReader:
 
 def _rename_columns(frame: pd.DataFrame) -> pd.DataFrame:
     rename_map: dict[str, str] = {}
-    
+
     # Special handling for timestamp column to avoid conflicts
     # Prefer 'ts' (datetime) over 't' (numeric) when both exist
     timestamp_aliases = _COLUMN_ALIASES["timestamp"]
     timestamp_source = None
-    
+
     # Check for datetime timestamp first (highest priority)
     if "ts" in frame.columns and pd.api.types.is_datetime64_any_dtype(frame["ts"]):
         timestamp_source = "ts"
@@ -244,10 +254,10 @@ def _rename_columns(frame: pd.DataFrame) -> pd.DataFrame:
             if alias in frame.columns and alias not in {"ts", "t"}:
                 timestamp_source = alias
                 break
-    
+
     if timestamp_source:
         rename_map[timestamp_source] = "timestamp"
-    
+
     # Handle all other columns
     for canonical, aliases in _COLUMN_ALIASES.items():
         if canonical == "timestamp":

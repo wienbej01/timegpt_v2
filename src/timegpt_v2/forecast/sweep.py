@@ -56,7 +56,9 @@ class ForecastGridSpec:
     calibration_methods: tuple[str, ...]
 
     @classmethod
-    def from_mapping(cls, payload: Mapping[str, Any], *, base_config: Mapping[str, Any]) -> ForecastGridSpec:
+    def from_mapping(
+        cls, payload: Mapping[str, Any], *, base_config: Mapping[str, Any]
+    ) -> ForecastGridSpec:
         def _ensure_tuple(sequence: Iterable[Any]) -> tuple[Any, ...]:
             return tuple(sequence)
 
@@ -70,7 +72,11 @@ class ForecastGridSpec:
 
         snapshot_presets = _extract(
             "snapshot_presets",
-            [str(base_config.get("snapshot_preset", ""))] if base_config.get("snapshot_preset") else [],
+            (
+                [str(base_config.get("snapshot_preset", ""))]
+                if base_config.get("snapshot_preset")
+                else []
+            ),
         )
         if not snapshot_presets:
             raise typer.BadParameter("forecast grid must define at least one snapshot preset")
@@ -81,7 +87,8 @@ class ForecastGridSpec:
             for seq in _extract("quantile_sets", [base_config.get("quantiles", [0.25, 0.5, 0.75])])
         )
         level_sets = tuple(
-            tuple(int(level) for level in seq) for seq in _extract("level_sets", [base_config.get("levels", [])])
+            tuple(int(level) for level in seq)
+            for seq in _extract("level_sets", [base_config.get("levels", [])])
         )
         if not level_sets:
             level_sets = (tuple(),)
@@ -359,4 +366,6 @@ class ForecastGridSearch:
         try:
             command(**kwargs)
         except typer.Exit as exc:  # pragma: no cover - defensive
-            raise RuntimeError(f"Command {command.__name__} exited with code {exc.exit_code}") from exc
+            raise RuntimeError(
+                f"Command {command.__name__} exited with code {exc.exit_code}"
+            ) from exc

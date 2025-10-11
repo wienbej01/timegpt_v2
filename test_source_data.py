@@ -4,6 +4,7 @@ import pandas as pd
 
 ET_ZONE = ZoneInfo("America/New_York")
 
+
 def normalize_like_gcs(df, ticker="AAPL"):
     """Mimic the GCS reader's _normalise_dataframe method."""
     if df.empty:
@@ -27,7 +28,7 @@ def normalize_like_gcs(df, ticker="AAPL"):
         "vw": "vw",
         "n": "n",
         "session": "session",
-        "date_et": "date_et"
+        "date_et": "date_et",
     }
     df = df.rename(columns=rename_map)
 
@@ -37,7 +38,7 @@ def normalize_like_gcs(df, ticker="AAPL"):
     # Convert timestamp
     timestamps = df["timestamp"]
     if pd.api.types.is_datetime64_any_dtype(timestamps):
-        if hasattr(timestamps, 'dt') and timestamps.dt.tz is not None:
+        if hasattr(timestamps, "dt") and timestamps.dt.tz is not None:
             df["timestamp"] = timestamps.dt.tz_convert(ET_ZONE)
         else:
             df["timestamp"] = timestamps.dt.tz_localize(ET_ZONE)
@@ -53,6 +54,7 @@ def normalize_like_gcs(df, ticker="AAPL"):
     df = df.sort_values("timestamp").reset_index(drop=True)
 
     return df
+
 
 def main():
     # Read the source Parquet file
@@ -73,43 +75,45 @@ def main():
         print(f"\nNull counts:\n{nulls}")
 
         # Check for duplicates on timestamp (raw data has 'ts')
-        dupes_raw = df.duplicated(subset=['ts']).sum()
+        dupes_raw = df.duplicated(subset=["ts"]).sum()
         print(f"\nRaw data duplicates on ['ts']: {dupes_raw}")
 
         if dupes_raw > 0:
             print("Sample raw duplicates:")
-            dup_mask_raw = df.duplicated(subset=['ts'], keep=False)
-            dup_examples_raw = df[dup_mask_raw].sort_values(['ts']).head(10)
-            print(dup_examples_raw[['ts', 'o', 'h', 'l', 'c', 'session']])
+            dup_mask_raw = df.duplicated(subset=["ts"], keep=False)
+            dup_examples_raw = df[dup_mask_raw].sort_values(["ts"]).head(10)
+            print(dup_examples_raw[["ts", "o", "h", "l", "c", "session"]])
 
         # Check if multiple sessions exist for same ET time
         # Convert ts to ET
-        ts_et = pd.to_datetime(df['ts'], utc=True).dt.tz_convert(ET_ZONE)
+        ts_et = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(ET_ZONE)
         df_with_et = df.copy()
-        df_with_et['ts_et'] = ts_et
+        df_with_et["ts_et"] = ts_et
 
         # Check duplicates on ET time
-        dupes_et = df_with_et.duplicated(subset=['ts_et']).sum()
+        dupes_et = df_with_et.duplicated(subset=["ts_et"]).sum()
         print(f"\nRaw data duplicates on ET time ['ts_et']: {dupes_et}")
 
         if dupes_et > 0:
             print("Sample ET time duplicates across sessions:")
-            dup_mask_et = df_with_et.duplicated(subset=['ts_et'], keep=False)
-            dup_examples_et = df_with_et[dup_mask_et].sort_values(['ts_et', 'session']).head(20)
-            print(dup_examples_et[['ts', 'ts_et', 'o', 'c', 'session']])
+            dup_mask_et = df_with_et.duplicated(subset=["ts_et"], keep=False)
+            dup_examples_et = df_with_et[dup_mask_et].sort_values(["ts_et", "session"]).head(20)
+            print(dup_examples_et[["ts", "ts_et", "o", "c", "session"]])
 
             # Group by ET time and count sessions
-            session_counts_per_et = df_with_et.groupby(['ts_et', 'session']).size().unstack(fill_value=0)
+            session_counts_per_et = (
+                df_with_et.groupby(["ts_et", "session"]).size().unstack(fill_value=0)
+            )
             multiple_sessions = session_counts_per_et.sum(axis=1) > 1
             print(f"\nET times with multiple sessions: {multiple_sessions.sum()}")
             print("Sample ET times with multiple sessions:")
             print(session_counts_per_et[multiple_sessions].head(10))
 
         # Check if there's a 'symbol' column in raw data
-        if 'symbol' in df.columns:
-            unique_symbols = df['symbol'].unique()
+        if "symbol" in df.columns:
+            unique_symbols = df["symbol"].unique()
             print(f"\nUnique symbols in raw data: {unique_symbols}")
-            symbol_counts = df['symbol'].value_counts()
+            symbol_counts = df["symbol"].value_counts()
             print(f"Symbol counts in raw data:\n{symbol_counts}")
         else:
             print("\nNo 'symbol' column in raw data.")
@@ -123,18 +127,20 @@ def main():
         print(normalized.head())
 
         # Check for duplicates on normalized data
-        dupes_normalized = normalized.duplicated(subset=['symbol', 'timestamp']).sum()
+        dupes_normalized = normalized.duplicated(subset=["symbol", "timestamp"]).sum()
         print(f"\nNormalized data duplicates on ['symbol', 'timestamp']: {dupes_normalized}")
 
         if dupes_normalized > 0:
             print("Sample normalized duplicates:")
-            dup_mask_norm = normalized.duplicated(subset=['symbol', 'timestamp'], keep=False)
-            dup_examples_norm = normalized[dup_mask_norm].sort_values(['symbol', 'timestamp']).head(10)
-            print(dup_examples_norm[['symbol', 'timestamp', 'open', 'close', 'session']])
+            dup_mask_norm = normalized.duplicated(subset=["symbol", "timestamp"], keep=False)
+            dup_examples_norm = (
+                normalized[dup_mask_norm].sort_values(["symbol", "timestamp"]).head(10)
+            )
+            print(dup_examples_norm[["symbol", "timestamp", "open", "close", "session"]])
 
         # Check session distribution
-        if 'session' in normalized.columns:
-            session_counts = normalized['session'].value_counts()
+        if "session" in normalized.columns:
+            session_counts = normalized["session"].value_counts()
             print(f"\nSession distribution in normalized data:\n{session_counts}")
 
         # Now simulate _prepare_columns from checks.py
@@ -146,18 +152,21 @@ def main():
         prepared.reset_index(drop=True, inplace=True)
 
         # Check duplicates after prepare
-        dupes_prepared = prepared.duplicated(subset=['symbol', 'timestamp']).sum()
+        dupes_prepared = prepared.duplicated(subset=["symbol", "timestamp"]).sum()
         print(f"Rows after prepare: {len(prepared)}")
         print(f"Duplicates after _prepare_columns: {dupes_prepared}")
 
         if dupes_prepared > 0:
             print("Sample after prepare duplicates:")
-            dup_mask_prep = prepared.duplicated(subset=['symbol', 'timestamp'], keep=False)
-            dup_examples_prep = prepared[dup_mask_prep].sort_values(['symbol', 'timestamp']).head(10)
-            print(dup_examples_prep[['symbol', 'timestamp', 'open', 'close', 'session']])
+            dup_mask_prep = prepared.duplicated(subset=["symbol", "timestamp"], keep=False)
+            dup_examples_prep = (
+                prepared[dup_mask_prep].sort_values(["symbol", "timestamp"]).head(10)
+            )
+            print(dup_examples_prep[["symbol", "timestamp", "open", "close", "session"]])
 
     except Exception as e:
         print(f"Error reading Parquet file: {e}")
+
 
 if __name__ == "__main__":
     main()

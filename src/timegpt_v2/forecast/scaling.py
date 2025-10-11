@@ -123,7 +123,6 @@ class TargetScaler:
         updated.drop(columns="scale", inplace=True)
         return updated
 
-
     @property
     def label_timestamp_column(self) -> str:
         mapping = {

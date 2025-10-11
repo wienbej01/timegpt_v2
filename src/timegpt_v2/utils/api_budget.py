@@ -74,7 +74,9 @@ class BudgetManager:
             state = BudgetState.from_dict(data)
             # Reset if day changed
             if state.today != date.today():
-                state = BudgetState(calls_today=0, calls_this_run=0, last_call=None, today=date.today())
+                state = BudgetState(
+                    calls_today=0, calls_this_run=0, last_call=None, today=date.today()
+                )
             return state
         except (OSError, json.JSONDecodeError, KeyError) as exc:
             self.logger.warning("Failed to load budget state: %s", exc)
@@ -84,7 +86,9 @@ class BudgetManager:
         """Save budget state to ledger file."""
         try:
             self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
-            self.ledger_path.write_text(json.dumps(self._state.to_dict(), indent=2), encoding="utf-8")
+            self.ledger_path.write_text(
+                json.dumps(self._state.to_dict(), indent=2), encoding="utf-8"
+            )
         except OSError as exc:
             self.logger.warning("Failed to save budget state: %s", exc)
 

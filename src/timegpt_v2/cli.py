@@ -17,6 +17,7 @@ import yaml
 # Load environment variables from .env if present
 try:
     from dotenv import load_dotenv  # type: ignore
+
     load_dotenv()
 except Exception:
     # Fallback simple .env parser
@@ -68,6 +69,7 @@ from timegpt_v2.forecast.timegpt_client import (
     TimeGPTClient,
     TimeGPTConfig,
     TimeGPTRetryPolicy,
+    _LocalDeterministicBackend,
 )
 from timegpt_v2.framing.build_payloads import build_x_df_for_horizon, build_y_df
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
@@ -162,6 +164,9 @@ def _iter_chunks(items: Sequence[str], size: int) -> Iterable[list[str]]:
 @app.command(name="check-data")
 def check_data(
     config_dir: Path = CONFIG_DIR_OPTION,
+    universe_config: str = typer.Option(
+        "universe.yaml", "--universe-config", help="Universe config file name"
+    ),
     run_id: str = RUN_ID_OPTION,
 ) -> None:
     """Validate source data before downstream processing."""
@@ -173,7 +178,7 @@ def check_data(
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / "loader.log"
 
-    universe_cfg = _load_yaml(config_dir / "universe.yaml")
+    universe_cfg = _load_yaml(config_dir / universe_config)
     data_cfg = _load_yaml(config_dir / "data.yaml")
     policy_cfg = _load_yaml(config_dir / "dq_policy.yaml")
 
@@ -199,9 +204,7 @@ def check_data(
         raise typer.BadParameter("configs/data.yaml must define gcs.template")
 
     reader = GCSReader(
-        ReaderConfig(
-            bucket=bucket, template=template, skip_timestamp_normalization=skip_ts_norm
-        )
+        ReaderConfig(bucket=bucket, template=template, skip_timestamp_normalization=skip_ts_norm)
     )
 
     raw_frame = reader.read_universe(tickers, start_date, end_date)
@@ -502,12 +505,15 @@ def forecast(
         resolved_api_key = api_key_cfg.strip()
     elif api_key_cfg is not None:
         resolved_api_key = str(api_key_cfg).strip()
-    if backend_mode in {"auto", "nixtla"}:
-        if not resolved_api_key:
+    if backend_mode in {"auto", "nixtla", "stub"}:
+        if backend_mode == "stub":
+            # Use local deterministic backend for testing
+            backend = _LocalDeterministicBackend()
+        elif not resolved_api_key:
             resolved_api_key = os.environ.get("TIMEGPT_API_KEY", "") or os.environ.get(
                 "NIXTLA_API_KEY", ""
             )
-        if resolved_api_key or backend_mode == "nixtla":
+        if backend_mode in {"auto", "nixtla"} and (resolved_api_key or backend_mode == "nixtla"):
             try:
                 backend = NixtlaTimeGPTBackend(
                     api_key=resolved_api_key or None,
@@ -521,18 +527,18 @@ def forecast(
                     raise typer.BadParameter(message) from exc
                 logger.warning("%s Falling back to deterministic backend.", message)
 
-    # Enforce live backend only; disallow stub fallback
+    # Allow stub backend for testing
     if backend is None:
         raise typer.BadParameter(
-            "TimeGPT live backend required (stub disabled). "
+            "TimeGPT backend required. "
             "Ensure TIMEGPT_API_KEY is set in environment or .env, "
-            "and set backend: nixtla in forecast.yaml."
+            "or set backend: stub in forecast.yaml for testing."
         )
-    
+
     # Backend-mode assertion and monitoring
-    if backend_mode != "nixtla":
+    if backend_mode not in {"nixtla", "stub", "auto"}:
         logger.error("Backend mode assertion failed: expected 'nixtla', got '%s'", backend_mode)
-        raise typer.BadParameter("Backend mode must be 'nixtla' for production runs")
+        raise typer.BadParameter("Backend mode must be 'nixtla' or 'stub' for production runs")
     backend_name = backend.__class__.__name__
     logger.info(
         "Using forecast backend=%s (mode=%s) horizon=%s freq=%s quantiles=%s preset=%s",
@@ -565,7 +571,7 @@ def forecast(
             features,
             snapshot_utc,
             target_column=scaler.target_column,
-            rolling_window_days=90  # Use 90-day rolling window to reduce payload size
+            rolling_window_days=90,  # Use 90-day rolling window to reduce payload size
         )
         if history.empty:
             continue
@@ -579,7 +585,7 @@ def forecast(
         if (symbol_counts < min_samples).any():
             logger.warning(
                 f"Skipping snapshot {snapshot_utc}: insufficient history (< {min_samples} samples for symbols: "
-                f"{sorted(symbol_counts[symbol_counts < min_samples].index.tolist())})"
+                f"{sorted(symbol_counts[symbol_counts < min_samples].index.tolist())}"
             )
             continue
 
@@ -694,7 +700,7 @@ def forecast(
                 pit_deviation_threshold=calibration_config.pit_deviation_threshold,
                 window=calibration_config.conformal_window,
             )
-                #If widening returns
+            # If widening returns
             if not widened.empty:
                 output = widened
                 output = enforce_quantile_monotonicity(output, logger=logger)
@@ -726,9 +732,7 @@ def forecast(
         "skip_events": skip_event_names,
         "calibration_applied": calibrator_loaded,
         "conformal_fallback_configured": (
-            bool(calibration_config.conformal_fallback)
-            if calibration_config
-            else False
+            bool(calibration_config.conformal_fallback) if calibration_config else False
         ),
         "conformal_fallback_applied": conformal_applied,
         "skip_event_dates": sorted(d.isoformat() for d in skip_dates),
@@ -1165,11 +1169,17 @@ def sweep(
     run_id: str = RUN_ID_OPTION,
     grid_config: Path | None = GRID_CONFIG_OPTION,
     forecast_grid: Path | None = typer.Option(
-        None, "--forecast-grid", exists=True, file_okay=True, dir_okay=False,
-        help="Optional forecast sweep specification (YAML)."
+        None,
+        "--forecast-grid",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        help="Optional forecast sweep specification (YAML).",
     ),
     execute: bool = typer.Option(
-        True, "--execute/--plan-only", help="Execute pipeline for each forecast combo (default: execute)."
+        True,
+        "--execute/--plan-only",
+        help="Execute pipeline for each forecast combo (default: execute).",
     ),
     reuse_baseline: bool = typer.Option(
         False,
@@ -1296,7 +1306,9 @@ def calibrate(
 
     forecasts = pd.read_csv(forecasts_path)
     if "ts_utc" not in forecasts.columns or "symbol" not in forecasts.columns:
-        raise typer.BadParameter("Forecasts must include 'ts_utc' and 'symbol' columns for calibration.")
+        raise typer.BadParameter(
+            "Forecasts must include 'ts_utc' and 'symbol' columns for calibration."
+        )
     if not any(col.startswith("q") for col in forecasts.columns):
         raise typer.BadParameter("Forecasts must include quantile columns prefixed with 'q'.")
 
@@ -1316,7 +1328,11 @@ def calibrate(
 
     holidays = get_trading_holidays(years=sorted({eval_start.year, eval_start.year - 1}))
     embargo_cutoff = compute_embargo_cutoff(eval_start, embargo_days, holidays)
-    window_days = calibration_config.calibration_window_days if calibration_config.calibration_window_days > 0 else None
+    window_days = (
+        calibration_config.calibration_window_days
+        if calibration_config.calibration_window_days > 0
+        else None
+    )
     calibration_subset, calibration_window_start = filter_calibration_window(
         forecasts,
         embargo_cutoff=embargo_cutoff,
@@ -1355,7 +1371,9 @@ def calibrate(
         rows_with_targets,
     )
     if dropped_missing_targets:
-        logger.warning("Dropped %s rows without y_true inside calibration window.", dropped_missing_targets)
+        logger.warning(
+            "Dropped %s rows without y_true inside calibration window.", dropped_missing_targets
+        )
 
     calibrator = ForecastCalibrator(calibration_config)
     if calibration_config.method == "none":
@@ -1379,7 +1397,9 @@ def calibrate(
                 int(row.get("n_samples", 0)) if pd.notna(row.get("n_samples", np.nan)) else 0,
             )
     else:
-        logger.warning("No calibration models were fitted. Check min_samples and data availability.")
+        logger.warning(
+            "No calibration models were fitted. Check min_samples and data availability."
+        )
 
     meta_path = run_dir / "meta.json"
     meta: dict[str, object] = {}
@@ -1388,7 +1408,9 @@ def calibrate(
     meta.setdefault("steps", {})
     meta["command"] = "calibrate"
 
-    calibration_window_start_str = calibration_window_start.isoformat() if calibration_window_start else None
+    calibration_window_start_str = (
+        calibration_window_start.isoformat() if calibration_window_start else None
+    )
     meta["steps"]["calibrate"] = {
         "run_id": run_id,
         "baseline_run": baseline_run_id,

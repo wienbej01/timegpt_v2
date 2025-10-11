@@ -1,4 +1,6 @@
 # TimeGPT v2 — System Technical Documentation
+**Version:** Sprint 3 (Framing + TimeGPT Client)
+**Last Updated:** 2025-10-11T07:28:00Z
 **Version:** Sprint 2 (Leakage-Safe Feature Engineering)
 **Last Updated:** 2025-10-11T05:36:00Z
 **Version:** Sprint 1 (GCS Reader + Data Quality Gates)
@@ -90,7 +92,34 @@ High-level workflow:
 
 ---
 
-## 3. Sprint 8 Additions
+## 4. Sprint 3 Additions
+
+### 4.1 Framing Layer
+- **Module:** [`src/timegpt_v2/framing/build_payloads.py`](src/timegpt_v2/framing/build_payloads.py:1)
+- **Key Functions:**
+  - `build_y_df()`: Constructs Y_df with rolling history window, forward-fill gaps, deterministic features, exogenous consistency.
+  - `build_x_df_for_horizon()`: Builds X_df with future deterministic features and static features from snapshot.
+- **Features:** Supports leakage-safe Y_df/X_df construction per snapshot with configurable history windows and horizons.
+
+### 4.2 TimeGPT Client Enhancements
+- **Module:** [`src/timegpt_v2/forecast/timegpt_client.py`](src/timegpt_v2/forecast/timegpt_client.py:1)
+- **Key Classes:**
+  - `TimeGPTClient`: Batch multi-series forecasting with caching, budget management, offline/online modes.
+  - `TimeGPTConfig`: Configuration for API calls, quantiles, horizons.
+- **Features:** SHA256-based caching, API budget tracking, deterministic backend for testing.
+
+### 4.3 CLI Forecast Command
+- **Module:** [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1)
+- **Key Command:** `forecast` with `--api-mode offline|online`, budget enforcement, cache integration.
+- **Outputs:** Quantiles CSV, per-snapshot JSON with cache keys, logs with API call counts.
+
+### 4.4 Tests
+- [`tests/test_framing.py`](tests/test_framing.py:1): Validates Y_df/X_df construction, gap filling, feature inclusion.
+- [`tests/test_forecast_client.py`](tests/test_forecast_client.py:1): Tests batch forecasting, caching, budget management.
+
+---
+
+## 5. Sprint 8 Additions
 
 ### 3.1 Backend Enforcement and .env Loader
 - **Module:** [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1)
@@ -133,7 +162,8 @@ High-level workflow:
 |------|--------|-------------------------|
 | CLI | [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1) | Typer commands (`check-data`, `build-features`, `forecast`, `backtest`, `evaluate`, `report`, `sweep`, `calibrate`). Sweep now accepts `--forecast-grid`, `--plan-only`, `--reuse-baseline`, `--baseline-run`. |
 | Feature Engineering | [`src/timegpt_v2/fe/base_features.py`](src/timegpt_v2/fe/base_features.py:1) | `build_feature_matrix`, expanded windows (ret_30m, rv_30m), skew/kurtosis, VWAP trend, volume percentile, signed volume, vol_ewm_15m, lagged market context. |
-| Forecast Client | [`src/timegpt_v2/forecast/timegpt_client.py`](src/timegpt_v2/forecast/timegpt_client.py:1) | Nixtla backend wrapper, caching, config (freq, horizon, quantiles, levels, model). |
+| Framing | [`src/timegpt_v2/framing/build_payloads.py`](src/timegpt_v2/framing/build_payloads.py:1) | `build_y_df`, `build_x_df_for_horizon`, leakage-safe Y_df/X_df construction with rolling windows and forward-fill. |
+| Forecast Client | [`src/timegpt_v2/forecast/timegpt_client.py`](src/timegpt_v2/forecast/timegpt_client.py:1) | Nixtla backend wrapper, batch multi-series forecasting, caching, budget management, offline/online modes. |
 | Calibration | [`src/timegpt_v2/eval/calibration.py`](src/timegpt_v2/eval/calibration.py:1) | `ForecastCalibrator`, `CalibrationModel`, affine + isotonic support, persistence, monotonic projection. |
 | Scaling | [`src/timegpt_v2/forecast/scaling.py`](src/timegpt_v2/forecast/scaling.py:1) | `TargetScaler`, reversible scaling across log/bp/z/log_return_15m modes. |
 | Scheduler | [`src/timegpt_v2/forecast/scheduler.py`](src/timegpt_v2/forecast/scheduler.py:1) | Snapshot presets, skip_dates, active windows, quota enforcement. |
@@ -284,6 +314,7 @@ python -m timegpt_v2.cli sweep \
 
 ## 11. Change Log
 
+| 2025-10-11 | Sprint 3 implementation: Framing + TimeGPT client | Implemented framing layer with build_y_df and build_x_df for leakage-safe Y_df and X_df construction per snapshot with rolling history windows and forward-fill gaps; enhanced TimeGPT client with batch multi-series forecasting, SHA256-based caching, API budget management, and offline/online modes; CLI forecast command iterates snapshots, enforces budget, supports cache hits; all tests pass including framing integrity, gap filling, and forecast output validation. |
 | 2025-10-11 | Sprint 2 implementation: Leakage-safe feature engineering | Implemented comprehensive feature engineering pipeline with return/volatility features (ret_1m/5m/15m/30m, rv_5m/15m/30m, ATR, Garman-Klass/Parkinson, VWAP, volume norms), deterministic intraday clocks (minute index, Fourier terms, session buckets), and SPY lagged context features (spy_ret_1m, spy_vol_30m, regime flags, event dummies); CLI build-features exports per-symbol parquet with 58 features; all tests pass including no future leakage verification. |
 | Date (UTC) | Summary | Details |
 |------------|---------|---------|

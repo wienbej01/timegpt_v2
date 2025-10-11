@@ -9,8 +9,9 @@ from timegpt_v2.quality.checks import DataQualityChecker
 CONFIG = ReaderConfig(
     bucket="/home/jacobw/gcs-mount/bronze",
     template="stocks/1m/{ticker}/{yyyy}/{ticker}_{yyyy_dash_mm}.parquet",
-    skip_timestamp_normalization=True
+    skip_timestamp_normalization=True,
 )
+
 
 def log_audit(stage, df, description=""):
     rows = len(df) if df is not None else 0
@@ -19,10 +20,11 @@ def log_audit(stage, df, description=""):
             dupes = df.duplicated(subset=["symbol", "timestamp"]).sum()
         else:
             dupes = "N/A"
-        symbols = df['symbol'].unique().tolist() if "symbol" in df.columns else "N/A"
+        symbols = df["symbol"].unique().tolist() if "symbol" in df.columns else "N/A"
         print(f"[{stage}] {rows} rows, duplicates: {dupes}, symbols: {symbols} - {description}")
     else:
         print(f"[{stage}] None - {description}")
+
 
 def forensic_read_universe(tickers, start_date, end_date):
     reader = GCSReader(CONFIG)
@@ -38,10 +40,11 @@ def forensic_read_universe(tickers, start_date, end_date):
 
     print(f"\n[CONCAT] Combining {len(all_frames)} ticker frames")
     combined = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame()
-    duplicates = combined.duplicated(subset=['symbol', 'timestamp']).sum()
+    duplicates = combined.duplicated(subset=["symbol", "timestamp"]).sum()
     log_audit("CONCAT_FINAL", combined, f"combined, duplicates: {duplicates}")
 
     return combined
+
 
 def forensic_quality_check(df):
     print("\n=== QUALITY CHECK FORENSIC ===")
@@ -58,6 +61,7 @@ def forensic_quality_check(df):
 
     return cleaned, report
 
+
 def main():
     # Test parameters that might reproduce the large dataset
     # Start with single year, then expand if needed
@@ -70,6 +74,7 @@ def main():
         forensic_quality_check(df)
     else:
         print("No data loaded.")
+
 
 if __name__ == "__main__":
     main()

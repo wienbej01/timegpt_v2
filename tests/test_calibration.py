@@ -39,8 +39,20 @@ class TestEnforceQuantileMonotonicity:
 
         result = enforce_quantile_monotonicity(data)
 
-        assert result.loc[0, "q10"] <= result.loc[0, "q25"] <= result.loc[0, "q50"] <= result.loc[0, "q75"] <= result.loc[0, "q90"]
-        assert result.loc[1, "q10"] <= result.loc[1, "q25"] <= result.loc[1, "q50"] <= result.loc[1, "q75"] <= result.loc[1, "q90"]
+        assert (
+            result.loc[0, "q10"]
+            <= result.loc[0, "q25"]
+            <= result.loc[0, "q50"]
+            <= result.loc[0, "q75"]
+            <= result.loc[0, "q90"]
+        )
+        assert (
+            result.loc[1, "q10"]
+            <= result.loc[1, "q25"]
+            <= result.loc[1, "q50"]
+            <= result.loc[1, "q75"]
+            <= result.loc[1, "q90"]
+        )
 
     def test_enforce_monotonicity_already_monotonic(self) -> None:
         """Already monotonic quantiles should be unchanged."""
@@ -277,7 +289,9 @@ class TestCalibrationModel:
             )
             model = CalibrationModel(config=config)
             model.affine_models["AAPL"] = {
-                "q50": AffineCalibration(slope=1.5, intercept=0.1, n_samples=100, last_updated="2024-01-01")
+                "q50": AffineCalibration(
+                    slope=1.5, intercept=0.1, n_samples=100, last_updated="2024-01-01"
+                )
             }
 
             model.save(path)
@@ -306,7 +320,13 @@ class TestForecastCalibrator:
     """Test forecast calibrator fitting and application."""
 
     def test_fit_affine(self) -> None:
-        config = CalibrationConfig(method="affine", min_samples=2, conformal_fallback=True, pit_deviation_threshold=0.1, conformal_window=10)
+        config = CalibrationConfig(
+            method="affine",
+            min_samples=2,
+            conformal_fallback=True,
+            pit_deviation_threshold=0.1,
+            conformal_window=10,
+        )
         calibrator = ForecastCalibrator(config)
         forecasts = pd.DataFrame(
             {
@@ -398,7 +418,9 @@ class TestForecastCalibrator:
         config = CalibrationConfig()
         calibrator = ForecastCalibrator(config)
         calibrator._model.affine_models["AAPL"] = {
-            "q50": AffineCalibration(slope=1.5, intercept=0.1, n_samples=100, last_updated="2024-01-01")
+            "q50": AffineCalibration(
+                slope=1.5, intercept=0.1, n_samples=100, last_updated="2024-01-01"
+            )
         }
         calibrator._model.isotonic_models["MSFT"] = {"q75": None}
 

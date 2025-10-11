@@ -1,0 +1,29 @@
+quantiles: [0.25, 0.5, 0.75]
+horizon_min: 5
+freq: min
+tz: America/New_York
+snapshots_et: ["10:00"]
+active_windows:
+  - start: "09:40"
+    end: "15:45"
+max_snapshots_per_day: 1
+max_total_snapshots: 1
+backend: nixtla
+api_key: ${TIMEGPT_API_KEY}
+base_url:
+timeout_sec: 30.0
+retry:
+  max: 3
+  backoff_sec: 1.0
+target:
+  column: ret_1m
+  scaling: none
+calibration:
+  method: none
+  model_path: models/calibration_minimal.json
+  calibration_window_days: 30
+  conformal_fallback: false
+  pit_deviation_threshold: 0.05
+  conformal_window: 30
+num_partitions: 100
+max_batch_size: 1

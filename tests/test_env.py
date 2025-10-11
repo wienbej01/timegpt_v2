@@ -29,6 +29,7 @@ def test_env_loading(tmp_path: Path) -> None:
         import importlib
 
         import timegpt_v2.cli
+
         importlib.reload(timegpt_v2.cli)
 
         # Check that keys are loaded
@@ -53,6 +54,7 @@ def test_env_fallback_parsing(tmp_path: Path) -> None:
                 import importlib
 
                 import timegpt_v2.cli
+
                 importlib.reload(timegpt_v2.cli)
 
                 assert os.environ.get("TIMEGPT_API_KEY") == "fallback_key"

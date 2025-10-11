@@ -73,7 +73,7 @@ class DataQualityChecker:
         print("\n=== FORENSIC AUDIT: BEFORE ANY CHECKS ===")
         print(working.info())
         print(working.head())
-        
+
         # Check for duplicates BEFORE any processing
         dup_before = working.duplicated(subset=["symbol", "timestamp"]).sum()
         print(f"\nDuplicates BEFORE _prepare_columns: {dup_before}")
@@ -85,7 +85,7 @@ class DataQualityChecker:
             dup_examples = working[dup_mask].sort_values(["symbol", "timestamp"]).head(20)
             print("\nFirst 20 duplicate rows:")
             print(dup_examples[["symbol", "timestamp", "open", "close"]])
-            
+
             # Check which symbols have duplicates
             dup_by_symbol = working[dup_mask].groupby("symbol").size()
             print("\nDuplicates by symbol:")
@@ -114,7 +114,7 @@ class DataQualityChecker:
         print("\n=== FORENSIC AUDIT: AFTER _prepare_columns ===")
         print(working.info())
         print(working.head())
-        
+
         dup_after = working.duplicated(subset=["symbol", "timestamp"]).sum()
         print(f"\nDuplicates AFTER _prepare_columns: {dup_after}")
         if dup_after > dup_before:
@@ -189,10 +189,10 @@ class DataQualityChecker:
                     if timestamps.dt.tz is None
                     else timestamps.dt.tz_convert(ET_ZONE)
                 )
-            elif hasattr(timestamps, 'dt') and timestamps.dt.tz is None:
+            elif hasattr(timestamps, "dt") and timestamps.dt.tz is None:
                 # Timezone-naive datetime, localize it
                 frame["timestamp"] = timestamps.dt.tz_localize(ET_ZONE)
-            elif hasattr(timestamps, 'dt') and timestamps.dt.tz != ET_ZONE:
+            elif hasattr(timestamps, "dt") and timestamps.dt.tz != ET_ZONE:
                 # Already timezone-aware but wrong timezone, convert it
                 frame["timestamp"] = timestamps.dt.tz_convert(ET_ZONE)
             # If already in ET_ZONE, leave it as-is
