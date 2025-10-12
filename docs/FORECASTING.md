@@ -6,7 +6,27 @@ The intraday feature stack is anchored on return-space targets to avoid scale dr
 
 ## Exogenous Features (X_df) & hist_exog_list
 
-Sprint 8 extends the framing layer to incorporate exogenous features for improved signal quality. Exogenous columns (`spy_ret_1m`, `spy_vol_30m`, `regime_high_vol`, `regime_high_dispersion`, `event_earnings`, `event_fomc`, `event_cpi`) are included in both historical (`Y_df`) and future (`X_df`) payloads. For historical data, these features are directly appended to the target frame, ensuring TimeGPT sees the full context. For future projections, exogenous values are held constant at the snapshot level (e.g., the value at the forecast start time is propagated forward), as future market conditions are unknown. The `hist_exog_list` parameter specifies these columns to TimeGPT, enabling the model to leverage market regime and event information without lookahead bias. This setup maintains API efficiency by refreshing forecasts only when exogenous features are added or updated, with caching ensuring minimal redundant calls.
+The exogenous feature pipeline has been refactored to be more robust and configurable. The behavior of the pipeline is controlled by the `exog` section in `configs/forecast.yaml`.
+
+```yaml
+exog:
+  enabled: true
+  strict: true
+  hist_exog:
+    - spy_ret_1m
+    - spy_vol_30m
+  futr_exog:
+    - event_earnings
+```
+
+-   `enabled`: A boolean flag to enable or disable the entire exogenous feature pipeline.
+-   `strict`: A boolean flag to control the behavior when exogenous features are missing from the feature matrix.
+    -   If `true`, the pipeline will raise a `ValueError`.
+    -   If `false`, the pipeline will log a warning and drop the missing features.
+-   `hist_exog`: A list of historical exogenous features to be included in the history dataframe.
+-   `futr_exog`: A list of future exogenous features to be included in the future dataframe.
+
+The `assemble_exog` function in `src/timegpt_v2/forecast/exogenous.py` is responsible for validating and merging the exogenous features into the forecast payloads. This function is called from the `TimeGPTClient` before making a forecast request. This ensures that the TimeGPT backend receives exactly the columns it expects, preventing mismatches and errors.
 
 ## Payload Management & Batching
 

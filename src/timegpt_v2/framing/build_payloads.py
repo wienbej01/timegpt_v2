@@ -68,8 +68,8 @@ def build_y_df(
     # Forward fill y for non-trading hours to avoid NaN in target
     renamed["y"] = renamed.groupby("unique_id")["y"].ffill()
 
-    # Minimal schema for the API
-    return renamed[["unique_id", "ds", "y"]].reset_index(drop=True)
+    cols_to_select = ["unique_id", "ds", "y"]
+    return renamed[cols_to_select].reset_index(drop=True)
 
 
 def build_x_df_for_horizon(
@@ -78,7 +78,6 @@ def build_x_df_for_horizon(
     horizon_minutes: int,
     *,
     symbols: Iterable[str] | None = None,
-    hist_exog_list: list[str] | None = None,
 ) -> pd.DataFrame:
     """Construct deterministic projections for minutes after *snapshot_ts*."""
     if horizon_minutes <= 0:
@@ -110,21 +109,7 @@ def build_x_df_for_horizon(
 
     combined = pd.concat(future_frames, ignore_index=True)
 
-    exog_cols_to_include = hist_exog_list or []
-    if exog_cols_to_include:
-        working = features.copy()
-        working["timestamp"] = pd.to_datetime(working["timestamp"], utc=True)
-        snapshot_rows = (
-            working.loc[
-                (working["timestamp"] == snapshot) & working["symbol"].isin(base_symbols),
-                ["symbol", *exog_cols_to_include],
-            ]
-            .drop_duplicates(subset="symbol", keep="last")
-            .rename(columns={"symbol": "unique_id"})
-        )
-        combined = combined.merge(snapshot_rows, on="unique_id", how="left")
-
-    ordered_cols = ["unique_id", "ds"] + exog_cols_to_include
+    ordered_cols = ["unique_id", "ds"]
     combined.sort_values(["unique_id", "ds"], inplace=True)
     return combined[ordered_cols].reset_index(drop=True)
 

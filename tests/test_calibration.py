@@ -116,19 +116,19 @@ class TestApplyConformalWidening:
         """Intervals remain unchanged when deviation within tolerance."""
         forecasts = pd.DataFrame(
             {
-                "symbol": ["AAPL"],
-                "ts_utc": ["2024-01-01T10:00:00Z"],
-                "q25": [0.1],
-                "q50": [0.2],
-                "q75": [0.3],
+                "symbol": ["AAPL", "AAPL"],
+                "ts_utc": ["2024-01-01T10:00:00Z", "2024-01-02T10:00:00Z"],
+                "q25": [0.1, 0.1],
+                "q50": [0.2, 0.2],
+                "q75": [0.3, 0.3],
             }
         )
 
         actuals = pd.DataFrame(
             {
-                "symbol": ["AAPL"],
-                "ts_utc": ["2024-01-01T10:00:00Z"],
-                "y_true": [0.2],
+                "symbol": ["AAPL", "AAPL"],
+                "ts_utc": ["2024-01-01T10:00:00Z", "2024-01-02T10:00:00Z"],
+                "y_true": [0.2, 0.4],
             }
         )
 
@@ -180,7 +180,7 @@ class TestApplyConformalWidening:
 
         deltas = result["q75"] - result["q50"]
         assert deltas.iloc[0] == pytest.approx(0.3)
-        assert deltas.iloc[1] == pytest.approx(0.25)
+        assert deltas.iloc[1] == pytest.approx(0.225)
         assert deltas.iloc[2] <= deltas.iloc[1]
         assert deltas.iloc[3] <= deltas.iloc[2]
 

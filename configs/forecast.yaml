@@ -1,5 +1,5 @@
 # TimeGPT API and Batching Configuration
-api_mode: "offline"  # "offline" | "online"
+api_mode: "online"  # "offline" | "online"
 api_budget:
   per_run: 25
   per_day: 100
@@ -32,6 +32,22 @@ freq: "min"
 backend: nixtla
 model: timegpt-1-long-horizon
 levels: [50, 80, 95]
+
+# Exogenous Feature Configuration
+exog:
+  use_exogs: true
+  strict_exog: true
+  hist_exog_list:
+    - spy_ret_1m
+    - spy_vol_30m
+    - regime_high_vol
+    - regime_high_dispersion
+  futr_exog_list:
+    - event_earnings
+    - event_fomc
+    - event_cpi
+  exog_name_map: {}
+  impute_strategy: "none"
 
 # Retry and Cache Configuration
 retry:

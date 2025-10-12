@@ -40,6 +40,7 @@ from timegpt_v2.backtest.aggregation import (
 )
 from timegpt_v2.backtest.grid import GridSearch
 from timegpt_v2.backtest.simulator import BacktestSimulator
+from timegpt_v2.config.loader import load_forecast_exog_config
 from timegpt_v2.eval.calibration import (
     CalibrationConfig,
     ForecastCalibrator,
@@ -71,6 +72,7 @@ from timegpt_v2.eval.metrics_trading import (
 )
 from timegpt_v2.fe.base_features import build_feature_matrix
 from timegpt_v2.fe.context import FeatureContext
+
 from timegpt_v2.forecast.scaling import TargetScaler, TargetScalingConfig
 from timegpt_v2.forecast.scheduler import ForecastScheduler, get_trading_holidays
 from timegpt_v2.forecast.sweep import ForecastGridSearch, ForecastGridSpec
@@ -318,6 +320,15 @@ def forecast(
     ),
     unique_id_chunk_size: int = typer.Option(
         None, "--unique-id-chunk-size", help="Hard cap on series per batch. Overrides config."
+    ),
+    use_exogs: bool = typer.Option(
+        None, "--use-exogs/--no-exogs", help="Enable/disable exogenous features. Overrides config."
+    ),
+    strict_exog: bool = typer.Option(
+        None, "--strict-exog/--no-strict-exog", help="Enable/disable strict exogenous feature checking. Overrides config."
+    ),
+    exog_name_map: Path = typer.Option(
+        None, "--exog-name-map", help="Path to YAML file with exogenous feature name mapping. Overrides config."
     ),
 ) -> None:
     """Generate TimeGPT quantile forecasts."""
@@ -587,10 +598,26 @@ def forecast(
         list(quantiles),
         preset_name,
     )
+    
+    exog_config = load_forecast_exog_config(config_dir / "forecast.yaml")
+
+    if use_exogs is not None:
+        exog_config.use_exogs = use_exogs
+    if strict_exog is not None:
+        exog_config.strict_exog = strict_exog
+    if exog_name_map is not None:
+        exog_config.exog_name_map = _load_yaml(exog_name_map)
+
     client = TimeGPTClient(
         backend=backend,
         cache=cache,
-        config=TimeGPTConfig(freq=freq, horizon=horizon, quantiles=quantiles),
+        config=TimeGPTConfig(
+            freq=freq,
+            horizon=horizon,
+            quantiles=quantiles,
+            api_mode=forecast_cfg.get("api_mode", "offline"),
+            exog=exog_config,
+        ),
         logger=logger,
     )
 
@@ -639,13 +666,13 @@ def forecast(
             forecast_df = client.forecast(
                 history_chunk,
                 future_chunk,
+                features=features,
                 snapshot_ts=snapshot_utc,
+                run_id=run_id,
                 horizon=horizon,
                 freq=freq,
                 quantiles=quantiles,
-                hist_exog_list=EXOGENOUS_FEATURE_COLUMNS,
             )
-            raise typer.Exit(code=1)
             forecast_df["snapshot_utc"] = snapshot_utc
             results.append(forecast_df)
 

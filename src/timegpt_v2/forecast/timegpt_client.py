@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time as _time
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
+from pathlib import Path
 from typing import Protocol
 
 import numpy as np
 import pandas as pd
 
+from timegpt_v2.config.model import ForecastExogConfig
 from timegpt_v2.forecast.batcher import build_batches
+from timegpt_v2.forecast.exogenous import (
+    build_future_frame,
+    estimate_payload_bytes,
+    merge_history_exogs,
+    normalize_names,
+    preflight_log,
+    select_available,
+)
 from timegpt_v2.utils.api_budget import APIBudget
 from timegpt_v2.utils.cache import CacheKey, ForecastCache
 from timegpt_v2.utils.payload import estimate_bytes
@@ -54,6 +65,7 @@ class TimeGPTConfig:
     max_bytes_per_call: int = 150_000_000
     api_mode: str = "offline"
     num_partitions_default: int | None = None
+    exog: ForecastExogConfig = field(default_factory=ForecastExogConfig)
 
 
 @dataclass(frozen=True)
@@ -106,8 +118,20 @@ class NixtlaTimeGPTBackend:
         retry: TimeGPTRetryPolicy | None = None,
         timeout: float = 30.0,
     ) -> None:
-        # ... (existing implementation)
-        pass
+        if not api_key:
+            raise ValueError("TimeGPT API key not provided")
+        try:
+            from nixtla import NixtlaClient
+        except ImportError as exc:
+            raise ImportError("nixtla package not installed") from exc
+
+        self._client = NixtlaClient(
+            api_key=api_key,
+            base_url=base_url,
+            max_retries=retry.max_attempts if retry else 3,
+            timeout=timeout,
+        )
+        self._retry_policy = retry or TimeGPTRetryPolicy()
 
     def forecast(
         self,
@@ -120,8 +144,51 @@ class NixtlaTimeGPTBackend:
         hist_exog_list: Sequence[str] | None = None,
         num_partitions: int | None = None,
     ) -> pd.DataFrame:
-        # ... (existing implementation)
-        pass
+        """Call TimeGPT API and transform response to expected format."""
+        # Prepare exogenous features
+        hist_exog_cols = list(hist_exog_list) if hist_exog_list else []
+        X_df = None
+        if x is not None and not x.empty:
+            # X_df should include ds, unique_id, and exogenous columns
+            X_df = x.copy()
+            # Ensure ds column exists (assume same as y)
+            if "ds" not in X_df.columns:
+                # Merge ds from y
+                X_df = X_df.merge(y[["unique_id", "ds"]], on="unique_id", how="left")
+
+        try:
+            # Call Nixtla API
+            result = self._client.forecast(
+                df=y,
+                h=h,
+                freq=freq,
+                quantiles=list(quantiles),
+                X_df=X_df,
+                hist_exog_list=hist_exog_cols if hist_exog_cols else None,
+                num_partitions=num_partitions,
+            )
+        except Exception as exc:
+            error_msg = str(exc).lower()
+            if "payload" in error_msg and "large" in error_msg:
+                raise PayloadTooLargeError(f"Payload too large: {exc}") from exc
+            # Re-raise other exceptions
+            raise
+
+        # Transform result to expected format: unique_id, quantile, value
+        rows: list[dict[str, object]] = []
+        for _, row in result.iterrows():
+            unique_id = str(row["unique_id"])
+            for q in quantiles:
+                col_name = f"TimeGPT-q-{int(round(q * 100))}"
+                if col_name in result.columns:
+                    value = float(row[col_name])
+                    rows.append({
+                        "unique_id": unique_id,
+                        "quantile": q,
+                        "value": value,
+                    })
+
+        return pd.DataFrame(rows)
 
 
 class TimeGPTClient:
@@ -147,11 +214,12 @@ class TimeGPTClient:
         y_df: pd.DataFrame,
         x_df: pd.DataFrame | None,
         *,
+        features: pd.DataFrame,
         snapshot_ts: pd.Timestamp,
+        run_id: str,
         horizon: int | None = None,
         freq: str | None = None,
         quantiles: Sequence[float] | None = None,
-        hist_exog_list: Sequence[str] | None = None,
     ) -> pd.DataFrame:
         """Forecast quantiles for the provided multi-series payload."""
         quantiles_tuple = tuple(float(q) for q in (quantiles or self._config.quantiles))
@@ -170,7 +238,7 @@ class TimeGPTClient:
         cache_key_map: dict[str, CacheKey] = {}
 
         for unique_id in unique_ids:
-            key = self._get_cache_key(unique_id, snapshot_utc, horizon_minutes, quantiles_tuple, hist_exog_list)
+            key = self._get_cache_key(unique_id, snapshot_utc, horizon_minutes, quantiles_tuple)
             cached = self._cache.get(key) if self._cache is not None else None
             if cached is not None:
                 row = self._deserialize_cache(
@@ -209,10 +277,11 @@ class TimeGPTClient:
                 forecast_result = self.call_timegpt(
                     y_batch,
                     x_batch,
+                    features=features,
+                    run_id=run_id,
                     h=horizon_minutes,
                     freq=freq_value,
                     quantiles=quantiles_tuple,
-                    hist_exog_list=hist_exog_list,
                 )
                 pivot = forecast_result.pivot(index="unique_id", columns="quantile", values="value")
                 for unique_id in batch_meta["unique_ids"]:
@@ -248,6 +317,8 @@ class TimeGPTClient:
         y_batch: pd.DataFrame,
         x_batch: pd.DataFrame | None,
         *,
+        features: pd.DataFrame,
+        run_id: str,
         h: int,
         freq: str,
         quantiles: Sequence[float],
@@ -255,8 +326,93 @@ class TimeGPTClient:
         num_partitions: int | None = None,
     ) -> pd.DataFrame:
         """Call the TimeGPT backend with retry and partitioning logic."""
+        if not self._config.exog.use_exogs:
+            y_batch_exog = y_batch
+            x_batch_exog = x_batch
+        else:
+            # Normalize names
+            hist_exog_declared = normalize_names(
+                self._config.exog.hist_exog_list_raw, self._config.exog.exog_name_map
+            )
+            futr_exog_declared = normalize_names(
+                self._config.exog.futr_exog_list_raw, self._config.exog.exog_name_map
+            )
+
+            # Select available
+            hist_exog_present, hist_exog_missing = select_available(
+                hist_exog_declared, features.columns
+            )
+            futr_exog_present, futr_exog_missing = select_available(
+                futr_exog_declared, features.columns
+            )
+
+            y_shape_before = y_batch.shape
+            x_shape_before = x_batch.shape if x_batch is not None else (0, 0)
+
+            # Merge history exogs
+            y_batch_exog = merge_history_exogs(
+                y_batch,
+                features,
+                hist_exog_declared,
+                self._config.exog.strict_exog,
+                self._config.exog.impute_strategy,
+                self._logger,
+            )
+
+            # Build future frame
+            x_batch_exog = build_future_frame(
+                x_batch,
+                features,
+                futr_exog_declared,
+                self._config.exog.strict_exog,
+                self._logger,
+            )
+
+            y_shape_after = y_batch_exog.shape
+            x_shape_after = x_batch_exog.shape if x_batch_exog is not None else (0, 0)
+
+            # Log preflight info
+            preflight_log(
+                self._logger,
+                hist_exog_declared,
+                hist_exog_present,
+                hist_exog_missing,
+                futr_exog_declared,
+                futr_exog_present,
+                futr_exog_missing,
+                y_shape_before,
+                y_shape_after,
+                x_shape_before,
+                x_shape_after,
+            )
+
+            # Create metadata dictionary
+            meta_exogs = {
+                "declared_hist": hist_exog_declared,
+                "present_hist": hist_exog_present,
+                "dropped_hist": hist_exog_missing,
+                "declared_futr": futr_exog_declared,
+                "present_futr": futr_exog_present,
+                "dropped_futr": futr_exog_missing,
+                "y_shape_before": list(y_shape_before),
+                "y_shape_after": list(y_shape_after),
+                "x_shape_before": list(x_shape_before),
+                "x_shape_after": list(x_shape_after),
+                "estimated_y_bytes": int(estimate_payload_bytes(y_batch_exog)),
+                "estimated_x_bytes": int(estimate_payload_bytes(x_batch_exog)),
+            }
+
+            # Write metadata to file
+            run_dir = Path("artifacts") / "runs" / run_id
+            meta_exogs_path = run_dir / "meta_exogs.json"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            with meta_exogs_path.open("w", encoding="utf-8") as f:
+                json.dump(meta_exogs, f, indent=2)
+
+        hist_exog_list_final = [c for c in y_batch_exog.columns if c not in ["unique_id", "ds", "y"]]
+
         try:
-            if estimate_bytes(y_batch) + estimate_bytes(x_batch) > self._config.max_bytes_per_call:
+            if estimate_payload_bytes(y_batch_exog) + estimate_payload_bytes(x_batch_exog) > self._config.max_bytes_per_call:
                 if num_partitions is None:
                     num_partitions = 2
                 else:
@@ -264,22 +420,22 @@ class TimeGPTClient:
 
             self._budget.record_call(1 if num_partitions is None else num_partitions)
             return self._backend.forecast(
-                y_batch,
-                x_batch,
+                y_batch_exog,
+                x_batch_exog,
                 h=h,
                 freq=freq,
                 quantiles=quantiles,
-                hist_exog_list=hist_exog_list,
+                hist_exog_list=hist_exog_list_final,
                 num_partitions=num_partitions,
             )
         except PayloadTooLargeError:
             if num_partitions is None:
                 return self.call_timegpt(
-                    y_batch, x_batch, h=h, freq=freq, quantiles=quantiles, hist_exog_list=hist_exog_list, num_partitions=2
+                    y_batch, x_batch, features=features, run_id=run_id, h=h, freq=freq, quantiles=quantiles, hist_exog_list=hist_exog_list, num_partitions=2
                 )
-            elif num_partitions < 8:
+            elif num_partitions < 2:
                 return self.call_timegpt(
-                    y_batch, x_batch, h=h, freq=freq, quantiles=quantiles, hist_exog_list=hist_exog_list, num_partitions=num_partitions * 2
+                    y_batch, x_batch, features=features, run_id=run_id, h=h, freq=freq, quantiles=quantiles, hist_exog_list=hist_exog_list, num_partitions=num_partitions * 2
                 )
             else:
                 # Fallback to splitting the batch
@@ -292,8 +448,8 @@ class TimeGPTClient:
                 y2 = y_batch[y_batch["unique_id"].isin(ids[mid:])]
                 x2 = x_batch[x_batch["unique_id"].isin(ids[mid:])] if x_batch is not None else None
 
-                f1 = self.call_timegpt(y1, x1, h=h, freq=freq, quantiles=quantiles, hist_exog_list=hist_exog_list)
-                f2 = self.call_timegpt(y2, x2, h=h, freq=freq, quantiles=quantiles, hist_exog_list=hist_exog_list)
+                f1 = self.call_timegpt(y1, x1, features=features, run_id=run_id, h=h, freq=freq, quantiles=quantiles, hist_exog_list=hist_exog_list)
+                f2 = self.call_timegpt(y2, x2, features=features, run_id=run_id, h=h, freq=freq, quantiles=quantiles, hist_exog_list=hist_exog_list)
                 return pd.concat([f1, f2], ignore_index=True)
 
     def _get_cache_key(
@@ -302,16 +458,16 @@ class TimeGPTClient:
         snapshot_utc: pd.Timestamp,
         horizon: int,
         quantiles: tuple[float, ...],
-        hist_exog_list: Sequence[str] | None,
     ) -> CacheKey:
         """Generate a cache key for a forecast."""
+        exog_features = tuple(sorted(self._config.exog.hist_exog_list) + sorted(self._config.exog.futr_exog_list))
         return CacheKey(
             symbol=unique_id,
             trade_date=snapshot_utc.date().isoformat(),
             snapshot=snapshot_utc.strftime("%H:%M"),
             horizon=horizon,
             quantiles=quantiles,
-            features_hash=hash(tuple(hist_exog_list or [])),
+            features_hash=hash(exog_features),
         )
 
     def _build_row(
