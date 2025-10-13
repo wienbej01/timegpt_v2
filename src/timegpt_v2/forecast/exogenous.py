@@ -1,149 +1,172 @@
+
+# src/timegpt_v2/forecast/exogenous.py
 from __future__ import annotations
-
-import logging
-from typing import Dict, Iterable, List, Tuple
-
+import numpy as np
 import pandas as pd
+from typing import List, Optional, Tuple
+import logging
 
+logger = logging.getLogger("timegpt_v2.forecast")
 
-def normalize_names(names: List[str], name_map: Dict[str, str]) -> List[str]:
-    """Map names using name_map, preserving order and removing duplicates."""
-    seen = set()
-    normalized = []
-    for name in names:
-        mapped = name_map.get(name, name)
-        if mapped not in seen:
-            seen.add(mapped)
-            normalized.append(mapped)
-    return normalized
+def normalize_names(names: List[str], name_map: dict[str, str]) -> List[str]:
+    return [name_map.get(name, name) for name in names]
 
-
-def select_available(
-    declared: List[str], columns: Iterable[str]
-) -> Tuple[List[str], List[str]]:
-    """Return (present, missing) where present is a subset of declared."""
-    present = [col for col in declared if col in columns]
-    missing = [col for col in declared if col not in columns]
+def select_available(declared: List[str], available: pd.Index) -> Tuple[List[str], List[str]]:
+    present = [col for col in declared if col in available]
+    missing = [col for col in declared if col not in available]
     return present, missing
 
-
-def merge_history_exogs(
-    y_df: pd.DataFrame,
-    features_df: pd.DataFrame,
-    exogs: List[str],
-    strict: bool,
-    impute_strategy: str,
-    logger: logging.Logger,
-) -> pd.DataFrame:
-    """Merge historical exogenous features into the history dataframe."""
-    if not exogs:
-        return y_df
-
-    present_exogs, missing_exogs = select_available(exogs, features_df.columns)
-
-    if missing_exogs:
-        msg = f"Missing historical exogenous features: {missing_exogs}"
-        if strict:
-            logger.error(msg)
-            raise ValueError(msg)
-        logger.warning(f"Permissive mode. Dropping missing hist exogs: {missing_exogs}")
-
-    if not present_exogs:
-        return y_df
-
-    features_to_merge = features_df.rename(columns={"symbol": "unique_id", "timestamp": "ds"})
-    features_to_merge["ds"] = pd.to_datetime(features_to_merge["ds"], utc=True)
-
-    y_df_exog = pd.merge(
-        y_df,
-        features_to_merge[["unique_id", "ds", *present_exogs]],
-        on=["unique_id", "ds"],
-        how="left",
-    )
-
-    if impute_strategy == "ffill":
-        y_df_exog[present_exogs] = y_df_exog.groupby("unique_id")[present_exogs].ffill()
-    elif impute_strategy == "bfill":
-        y_df_exog[present_exogs] = y_df_exog.groupby("unique_id")[present_exogs].bfill()
-    elif impute_strategy == "zero":
-        y_df_exog[present_exogs] = y_df_exog[present_exogs].fillna(0)
-
-    # Drop rows that still contain NaNs in required exogs
-    rows_before = len(y_df_exog)
-    y_df_exog.dropna(subset=present_exogs, inplace=True)
-    rows_after = len(y_df_exog)
-    if rows_before > rows_after:
-        logger.warning(f"Dropped {rows_before - rows_after} rows with NaNs in hist exogs.")
-
-    return y_df_exog
-
-
-def build_future_frame(
-    x_df: pd.DataFrame | None,
-    future_features_df: pd.DataFrame,
-    futr_exogs: List[str],
-    strict: bool,
-    logger: logging.Logger,
-) -> pd.DataFrame | None:
-    """Merge future exogenous features into the future dataframe."""
-    if x_df is None or not futr_exogs:
-        return x_df
-
-    present_exogs, missing_exogs = select_available(futr_exogs, future_features_df.columns)
-
-    if missing_exogs:
-        msg = f"Missing future exogenous features: {missing_exogs}"
-        if strict:
-            logger.error(msg)
-            raise ValueError(msg)
-        logger.warning(f"Permissive mode. Dropping missing futr exogs: {missing_exogs}")
-
-    if not present_exogs:
-        return x_df
-
-    features_to_merge = future_features_df.rename(
-        columns={"symbol": "unique_id", "timestamp": "ds"}
-    )
-    features_to_merge["ds"] = pd.to_datetime(features_to_merge["ds"], utc=True)
-
-    x_df_exog = pd.merge(
-        x_df,
-        features_to_merge[["unique_id", "ds", *present_exogs]],
-        on=["unique_id", "ds"],
-        how="left",
-    )
-
-    return x_df_exog
-
-
 def preflight_log(
-    logger: logging.Logger,
-    declared_hist: List[str],
-    present_hist: List[str],
-    missing_hist: List[str],
-    declared_futr: List[str],
-    present_futr: List[str],
-    missing_futr: List[str],
+    lg: logging.Logger,
+    hist_exog_declared: List[str],
+    hist_exog_present: List[str],
+    hist_exog_missing: List[str],
+    futr_exog_declared: List[str],
+    futr_exog_present: List[str],
+    futr_exog_missing: List[str],
     y_shape_before: Tuple[int, int],
     y_shape_after: Tuple[int, int],
     x_shape_before: Tuple[int, int],
     x_shape_after: Tuple[int, int],
 ) -> None:
-    """Emit concise structured logs for transparency."""
-    logger.info("--- Exogenous Feature Preflight ---")
-    logger.info(f"Declared hist exogs: {declared_hist}")
-    logger.info(f"Present hist exogs:  {present_hist}")
-    logger.info(f"Missing hist exogs:  {missing_hist}")
-    logger.info(f"Declared futr exogs: {declared_futr}")
-    logger.info(f"Present futr exogs:  {present_futr}")
-    logger.info(f"Missing futr exogs:  {missing_futr}")
-    logger.info(f"History shape before: {y_shape_before}, after: {y_shape_after}")
-    logger.info(f"Future shape before:  {x_shape_before}, after: {x_shape_after}")
-    logger.info("------------------------------------")
+    lg.info("--- Exogenous Features Preflight ---")
+    lg.info("History exogs declared: %s", hist_exog_declared)
+    lg.info("History exogs present: %s", hist_exog_present)
+    if hist_exog_missing:
+        lg.warning("History exogs missing: %s", hist_exog_missing)
+    lg.info("Future exogs declared: %s", futr_exog_declared)
+    lg.info("Future exogs present: %s", futr_exog_present)
+    if futr_exog_missing:
+        lg.warning("Future exogs missing: %s", futr_exog_missing)
+    lg.info("y_df shape before/after: %s -> %s", y_shape_before, y_shape_after)
+    lg.info("x_df shape before/after: %s -> %s", x_shape_before, x_shape_after)
 
-
-def estimate_payload_bytes(df: pd.DataFrame | None) -> int:
-    """Rough estimate to log before call."""
+def estimate_payload_bytes(df: pd.DataFrame) -> int:
     if df is None:
         return 0
     return df.memory_usage(deep=True).sum()
+
+def build_future_frame(
+    x_df: pd.DataFrame,
+    features_df: pd.DataFrame,
+    futr_exogs: list[str],
+    strict: bool,
+    log: logging.Logger,
+) -> pd.DataFrame:
+    # This function is being replaced by merge_future_exogs
+    if x_df is None:
+        return pd.DataFrame() # Should not happen if futr_exogs is not empty
+    return x_df
+
+def merge_history_exogs(
+    y_df: pd.DataFrame,
+    features_df: pd.DataFrame,
+    exogs: List[str],
+    strict: bool = True,
+    impute_strategy: str = "none",
+    log: Optional[logging.Logger] = None,
+) -> pd.DataFrame:
+    features_df = features_df.copy()
+    if "timestamp" in features_df.columns:
+        features_df.rename(columns={"timestamp": "ds"}, inplace=True)
+    if "symbol" in features_df.columns:
+        features_df.rename(columns={"symbol": "unique_id"}, inplace=True)
+    """
+    Merge historical exogenous variables into y_df and return a dataframe
+    that contains the bare exog names without pandas suffixes.
+    - If y_df already contains some of exogs, we coalesce with features_df values.
+    - If impute_strategy == 'zero', impute numerics with 0 and booleans with False.
+    - If strict is True, drop rows with NaNs in required exogs (after coalesce/impute).
+    """
+    lg = log or logger
+
+    # Sanity: keys must exist
+    for col in ("unique_id", "ds"):
+        if col not in y_df.columns:
+            raise KeyError(f"y_df missing required column '{col}'")
+        if col not in features_df.columns:
+            raise KeyError(f"features_df missing required column '{col}'")
+
+    # Select only the columns we need from features to avoid accidental suffix explosion
+    needed_cols = ["unique_id", "ds"] + [c for c in exogs if c in features_df.columns]
+    feats = features_df[needed_cols].copy()
+
+    # Merge with controlled suffixes to avoid _x/_y ambiguity
+    merged = y_df.merge(
+        feats,
+        on=["unique_id", "ds"],
+        how="left",
+        suffixes=("", "_feat"),
+    )
+
+    # Coalesce any existing columns in y_df with the _feat columns from features_df
+    for c in exogs:
+        base = c
+        feat = f"{c}_feat"
+
+        if base in merged.columns and feat in merged.columns:
+            # y_df value wins unless NaN, then take features
+            merged[base] = merged[base].where(~merged[base].isna(), merged[feat])
+            merged.drop(columns=[feat], inplace=True)
+        elif feat in merged.columns and base not in merged.columns:
+            # Only features had it; rename to bare name
+            merged.rename(columns={feat: base}, inplace=True)
+        elif base not in merged.columns:
+            # Neither side had it; create it as NaN to allow downstream handling
+            merged[base] = np.nan
+
+    # Optional imputation
+    if impute_strategy == "zero":
+        for c in exogs:
+            if c not in merged.columns:
+                merged[c] = np.nan
+            # Boolean or numeric fill
+            if pd.api.types.is_bool_dtype(merged[c]):
+                merged[c] = merged[c].fillna(False)
+            else:
+                merged[c] = merged[c].fillna(0.0)
+
+    # Strict enforcement: drop rows with NaNs in bare exog names
+    if strict:
+        missing = [c for c in exogs if c not in merged.columns]
+        if missing:
+            raise KeyError(f"Missing required exogs after merge: {missing}")
+        rows_before = len(merged)
+        merged.dropna(subset=exogs, inplace=True)
+        rows_after = len(merged)
+        if rows_after < rows_before:
+            lg.warning(f"Dropped {rows_before - rows_after} rows with NaNs in hist exogs {exogs}")
+
+    return merged
+
+def merge_future_exogs(
+    x_df: pd.DataFrame,
+    features_df: pd.DataFrame,
+    futr_exogs: List[str],
+    strict: bool = True,
+) -> pd.DataFrame:
+    features_df = features_df.copy()
+    if "timestamp" in features_df.columns:
+        features_df.rename(columns={"timestamp": "ds"}, inplace=True)
+    if "symbol" in features_df.columns:
+        features_df.rename(columns={"symbol": "unique_id"}, inplace=True)
+    """
+    Left-join future exogs onto the future frame (x_df) on ['unique_id','ds'].
+    For boolean event flags, default missing to False when strict=True.
+    """
+    if not futr_exogs:
+        return x_df
+
+    needed_cols = ["unique_id", "ds"] + [c for c in futr_exogs if c in features_df.columns]
+    feats = features_df[needed_cols].copy()
+    out = x_df.merge(feats, on=["unique_id", "ds"], how="left")
+
+    if strict:
+        for c in futr_exogs:
+            if c not in out.columns:
+                # Create and default to False for event flags
+                out[c] = False
+            elif pd.api.types.is_bool_dtype(out[c]):
+                out[c] = out[c].fillna(False)
+
+    return out

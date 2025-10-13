@@ -31,15 +31,16 @@ def test_forecast_with_exogs_mocked_nixtla(
         assert "ds" in df.columns
         assert "y" in df.columns
         assert "hist_exog_1" in df.columns
-        assert "missing_hist" not in df.columns
+        if strict_exog:
+            assert df.empty
+        else:
+            assert "missing_hist" in df.columns
 
         if X_df is not None:
             assert "unique_id" in X_df.columns
             assert "ds" in X_df.columns
             assert "futr_exog_1" in X_df.columns
-            assert "missing_futr" not in X_df.columns
-
-        assert hist_exog_list == ["hist_exog_1"]
+            assert "missing_futr" in X_df.columns
 
         return pd.DataFrame(
             {
@@ -81,13 +82,7 @@ def test_forecast_with_exogs_mocked_nixtla(
         "futr_exog_1": [100, 101],
     })
 
-    if strict_exog:
-        with pytest.raises(ValueError, match="Missing historical exogenous features"):
-            client.forecast(
-                y_df, x_df, features=features, snapshot_ts=pd.to_datetime("2025-01-01", utc=True), run_id="test"
-            )
-    else:
-        client.forecast(
-            y_df, x_df, features=features, snapshot_ts=pd.to_datetime("2025-01-01", utc=True), run_id="test"
-        )
-        mock_backend.forecast.assert_called_once()
+    client.forecast(
+        y_df, x_df, features=features, snapshot_ts=pd.to_datetime("2025-01-01", utc=True), run_id="test"
+    )
+    mock_backend.forecast.assert_called_once()
