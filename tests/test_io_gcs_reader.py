@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import fsspec
 import pandas as pd
 
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
@@ -12,7 +13,7 @@ def _write_parquet(path, frame):
     frame.to_parquet(path, index=False)
 
 
-def test_read_month_normalises_aliases(tmp_path):
+def test_read_universe_normalises_aliases(tmp_path):
     timestamps = pd.date_range("2024-07-01 09:25", periods=6, freq="1min", tz="America/New_York")
     frame = pd.DataFrame(
         {
@@ -32,12 +33,18 @@ def test_read_month_normalises_aliases(tmp_path):
     target = tmp_path / "stocks" / "AAPL" / "2024" / "AAPL_2024_07.parquet"
     _write_parquet(target, frame)
 
+    # Create a dummy file for the previous month
+    prev_month = tmp_path / "stocks" / "AAPL" / "2024" / "AAPL_2024_06.parquet"
+    _write_parquet(prev_month, pd.DataFrame())
+
+
     reader = GCSReader(
         ReaderConfig(
             bucket=str(tmp_path), template="stocks/{ticker}/{yyyy}/{ticker}_{yyyy_mm}.parquet"
-        )
+        ),
+        fs=fsspec.filesystem("file"),
     )
-    result = reader.read_month("AAPL", 2024, 7)
+    result = reader.read_universe(["AAPL"], datetime(2024,7,1).date(), datetime(2024,7,1).date(), rolling_history_days=0)
 
     assert set(["timestamp", "open", "high", "low", "close", "volume", "symbol"]).issubset(
         result.columns
@@ -75,10 +82,11 @@ def test_read_universe_filters_to_requested_range(tmp_path):
     reader = GCSReader(
         ReaderConfig(
             bucket=str(tmp_path), template="stocks/{ticker}/{yyyy}/{ticker}_{yyyy_mm}.parquet"
-        )
+        ),
+        fs=fsspec.filesystem("file"),
     )
     subset = reader.read_universe(
-        ["AAPL"], datetime(2024, 7, 1).date(), datetime(2024, 7, 31).date()
+        ["AAPL"], datetime(2024, 7, 1).date(), datetime(2024, 7, 31).date(), rolling_history_days=0
     )
 
     assert subset["timestamp"].dt.month.unique().tolist() == [7]

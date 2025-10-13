@@ -22,7 +22,8 @@ The project is structured as a command-line application using the Typer library.
 
 The project follows a modular architecture, with different modules responsible for specific parts of the forecasting pipeline:
 
-*   **`io`:** Handles data ingestion from sources like Google Cloud Storage (GCS).
+*   **`loader`:** Handles multi-month data loading from sources like Google Cloud Storage (GCS), ensuring sufficient history for rolling window calculations.
+*   **`io`:** Handles data ingestion from sources like Google Cloud Storage (GCS), using the `loader` module for multi-month history loading.
 *   **`quality`:** Defines data quality contracts and performs data validation.
 *   **`fe`:** Contains logic for feature engineering.
 *   **`framing`:** Prepares data for the forecasting model.

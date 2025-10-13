@@ -193,6 +193,7 @@ def check_data(
     universe_cfg = _load_yaml(config_dir / universe_config)
     data_cfg = _load_yaml(config_dir / "data.yaml")
     policy_cfg = _load_yaml(config_dir / "dq_policy.yaml")
+    forecast_cfg = _load_yaml(config_dir / "forecast.yaml")
 
     tickers_raw = universe_cfg.get("tickers", [])
     if not isinstance(tickers_raw, Sequence):
@@ -218,8 +219,10 @@ def check_data(
     reader = GCSReader(
         ReaderConfig(bucket=bucket, template=template, skip_timestamp_normalization=skip_ts_norm)
     )
+    
+    rolling_history_days = int(forecast_cfg.get("rolling_history_days", 90))
 
-    raw_frame = reader.read_universe(tickers, start_date, end_date)
+    raw_frame = reader.read_universe(tickers, start_date, end_date, rolling_history_days)
     checker = DataQualityChecker(policy=DataQualityPolicy.from_dict(policy_cfg))
     clean_frame, report = checker.validate(raw_frame)
 

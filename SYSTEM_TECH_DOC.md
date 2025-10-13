@@ -253,6 +253,7 @@ High-level workflow:
 
 | Area | Module | Key Functions / Classes |
 |------|--------|-------------------------|
+| Loader | [`src/timegpt_v2/loader/gcs_loader.py`](src/timegpt_v2/loader/gcs_loader.py:1) | `load_history`, `enumerate_month_uris` |
 | CLI | [`src/timegpt_v2/cli.py`](src/timegpt_v2/cli.py:1) | Typer commands (`check-data`, `build-features`, `forecast`, `backtest`, `evaluate`, `report`, `sweep`). Sweep accepts `--forecast-grid`, `--plan-only`, `--reuse-baseline`, `--baseline-run`. |
 | Feature Engineering | [`src/timegpt_v2/fe/base_features.py`](src/timegpt_v2/fe/base_features.py:1) | `build_feature_matrix`, expanded windows (ret_30m, rv_30m), skew/kurtosis, VWAP trend, volume percentile, signed volume, vol_ewm_15m, lagged market context. |
 | Framing | [`src/timegpt_v2/framing/build_payloads.py`](src/timegpt_v2/framing/build_payloads.py:1) | `build_y_df`, `build_x_df_for_horizon`, leakage-safe Y_df/X_df construction with rolling windows and forward-fill. |
@@ -390,10 +391,20 @@ python -m timegpt_v2.cli sweep \
 | 2025-10-11 | Sprint 5 implementation: Quantile-Aware Trading Rules | Implemented EV(after-cost) > 0 check and uncertainty suppression using q-spread in trading rules; fixed position sizing to 1.0 unit exposure; updated tests for new logic; updated docs/TRADING_RULES.md; all tests pass including uncertainty suppression and EV validation. |
 | 2025-10-11 | Sprint 4 implementation: Calibration + Coverage Diagnostics | Implemented post-hoc quantile widening (`widen_intervals`), split-conformal prediction (`split_conformal`), and coverage reporting (`generate_coverage_report`) in calibration.py; enhanced evaluate command to generate per-symbol, per-snapshot coverage reports; updated docs/EVALUATION.md with calibration methods and gates; all tests pass including widening behavior and coverage calculations. |
 
+--- 
+
+## 11. Sprint 10 Additions
+
+### 11.1 Multi-month GCS Loader
+- **Module:** [`src/timegpt_v2/loader/gcs_loader.py`](src/timegpt_v2/loader/gcs_loader.py:1)
+- **Key Functions:**
+  - `load_history()`: Loads all months intersecting the history window snapshot_ts - rolling_history_days → snapshot_ts. This prevents underfilled history for early snapshots.
+- **Features:** Ingests minute-level OHLCV data from GCS bronze layer; automatically pulls all months intersecting the history window.
+- **Tests:** [`tests/test_loader_multimonth.py`](tests/test_loader_multimonth.py:1): Validates the multi-month loading logic.
+
 ---
 
 ## 12. Handoffs to Other Teams
-
 ### 12.1 Risk & Execution Controls
 - **Symbol-level Microstructure:** Review and refine half_spread_ticks and fee_bps in [`configs/trading.yaml`](configs/trading.yaml:1) for each symbol.
 - **Circuit Breakers:** Implement position limits, volatility halts, and emergency stops based on drawdown thresholds.
@@ -410,7 +421,7 @@ python -m timegpt_v2.cli sweep \
 
 ---
 
-## 11. Change Log
+## 13. Change Log
 
 | 2025-10-11 | Sprint 3 implementation: Framing + TimeGPT client | Implemented framing layer with build_y_df and build_x_df for leakage-safe Y_df and X_df construction per snapshot with rolling history windows and forward-fill gaps; enhanced TimeGPT client with batch multi-series forecasting, SHA256-based caching, API budget management, and offline/online modes; CLI forecast command iterates snapshots, enforces budget, supports cache hits; all tests pass including framing integrity, gap filling, and forecast output validation. |
 | 2025-10-11 | Sprint 2 implementation: Leakage-safe feature engineering | Implemented comprehensive feature engineering pipeline with return/volatility features (ret_1m/5m/15m/30m, rv_5m/15m/30m, ATR, Garman-Klass/Parkinson, VWAP, volume norms), deterministic intraday clocks (minute index, Fourier terms, session buckets), and SPY lagged context features (spy_ret_1m, spy_vol_30m, regime flags, event dummies); CLI build-features exports per-symbol parquet with 58 features; all tests pass including no future leakage verification. |

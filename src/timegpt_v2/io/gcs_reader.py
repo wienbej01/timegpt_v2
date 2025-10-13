@@ -1,7 +1,6 @@
 """GCS reader utilities for intraday bar data."""
 
-from __future__ import annotations
-
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, time
@@ -9,6 +8,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+from timegpt_v2.loader.gcs_loader import load_history
 
 try:  # pragma: no cover - optional import for runtime
     import gcsfs  # type: ignore
@@ -52,58 +53,28 @@ class GCSReader:
         self._fs = fs or self._build_filesystem(config.bucket)
         self._base_path = self._derive_base_path(config.bucket)
 
-    def read_month(self, ticker: str, year: int, month: int) -> pd.DataFrame:
-        """Read a single ticker/month parquet and apply canonical normalisation."""
-        relative_path = self._config.template.format(
-            ticker=ticker,
-            yyyy=str(year),
-            mm=f"{month:02d}",
-            yyyy_mm=f"{year}_{month:02d}",
-            yyyy_dash_mm=f"{year}-{month:02d}",
-        )
-        full_path = self._join_path(relative_path)
-        with self._fs.open(full_path) as fh:
-            frame = pd.read_parquet(fh)
-        frame = self._normalise_dataframe(frame, ticker)
-        return frame
-
-    def read_range(self, ticker: str, start: date, end: date) -> pd.DataFrame:
-        """Read and concatenate all months covering the inclusive date range."""
-        print(f"\n=== READING {ticker} FROM {start} TO {end} ===")
-        months = list(_iter_months(start, end))
-        print(f"Months to read: {months}")
-        if not months:
-            return pd.DataFrame()
-        frames = []
-        for year, month in months:
-            frame = self.read_month(ticker, year, month)
-            dup_count = frame.duplicated(subset=["symbol", "timestamp"]).sum()
-            print(f"  Month {year}-{month:02d}: {len(frame)} rows, duplicates: {dup_count}")
-            frames.append(frame)
-        combined = pd.concat(frames, ignore_index=True)
-        dup_after_concat = combined.duplicated(subset=["symbol", "timestamp"]).sum()
-        print(f"After concatenation: {len(combined)} rows, duplicates: {dup_after_concat}")
-
-        # Remove duplicates introduced by overlapping data across months
-        combined = combined.drop_duplicates(subset=["symbol", "timestamp"]).reset_index(drop=True)
-        print(f"After duplicate removal: {len(combined)} rows, duplicates: 0 (verifying...)")
-
-        mask = (combined["timestamp"].dt.date >= start) & (combined["timestamp"].dt.date <= end)
-        filtered = combined.loc[mask].reset_index(drop=True)
-        dup_final = filtered.duplicated(subset=["symbol", "timestamp"]).sum()
-        print(f"After date filtering: {len(filtered)} rows, duplicates: {dup_final}")
-        return filtered
-
-    def read_universe(self, tickers: Iterable[str], start: date, end: date) -> pd.DataFrame:
+    def read_universe(
+        self, tickers: Iterable[str], start: date, end: date, rolling_history_days: int
+    ) -> pd.DataFrame:
         """Read multiple tickers across date range into a single DataFrame."""
+        logger = logging.getLogger(__name__)
         print("\n=== FORENSIC AUDIT: GCS READER - read_universe ===")
         print(f"Reading tickers: {list(tickers)}")
         print(f"Date range: {start} to {end}")
 
         frames = []
+        gcs_config = {"bucket": self._config.bucket, "template": self._config.template}
         for ticker in tickers:
-            frame = self.read_range(ticker, start, end)
+            frame = load_history(
+                symbol=ticker,
+                start=start,
+                end=end,
+                rolling_history_days=rolling_history_days,
+                gcs_config=gcs_config,
+                logger=logger,
+            )
             if not frame.empty:
+                frame = self._normalise_dataframe(frame, ticker)
                 print(f"\nTicker {ticker}: {len(frame)} rows")
                 # Check for duplicates within this ticker
                 dup_count = frame.duplicated(subset=["symbol", "timestamp"]).sum()
