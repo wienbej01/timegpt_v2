@@ -28,6 +28,7 @@ from timegpt_v2.forecast.exogenous import (
 from timegpt_v2.utils.api_budget import APIBudget
 from timegpt_v2.utils.cache import CacheKey, ForecastCache
 from timegpt_v2.utils.payload import estimate_bytes
+from timegpt_v2.utils.col_schema import ALL_EXOG_COLS
 
 _ET_TZ = "America/New_York"
 
@@ -176,17 +177,13 @@ class NixtlaTimeGPTBackend:
 
         # Transform result to expected format: unique_id, quantile, value
         rows: list[dict[str, object]] = []
-        for _, row in result.iterrows():
-            unique_id = str(row["unique_id"])
+        for unique_id, group in result.groupby("unique_id"):
+            row = group.iloc[-1]
             for q in quantiles:
                 col_name = f"TimeGPT-q-{int(round(q * 100))}"
                 if col_name in result.columns:
                     value = float(row[col_name])
-                    rows.append({
-                        "unique_id": unique_id,
-                        "quantile": q,
-                        "value": value,
-                    })
+                    rows.append({"unique_id": unique_id, "quantile": q, "value": value})
 
         return pd.DataFrame(rows)
 
@@ -401,6 +398,15 @@ class TimeGPTClient:
                 "estimated_y_bytes": int(estimate_payload_bytes(y_batch_exog)),
                 "estimated_x_bytes": int(estimate_payload_bytes(x_batch_exog)),
             }
+
+            # Final check of the schema
+            missing_y_cols = ALL_EXOG_COLS - set(y_batch_exog.columns)
+            if missing_y_cols:
+                raise KeyError(f"Missing columns in the y_batch_exog: {sorted(missing_y_cols)}")
+            
+            missing_x_cols = ALL_EXOG_COLS - set(x_batch_exog.columns)
+            if missing_x_cols:
+                raise KeyError(f"Missing columns in the x_batch_exog: {sorted(missing_x_cols)}")
 
             # Write metadata to file
             run_dir = Path("artifacts") / "runs" / run_id

@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from timegpt_v2.quality.contracts import DEFAULT_CONTRACT, DataContract, DataQualityPolicy
+from timegpt_v2.utils.col_schema import CLEAN_DF_COLS
 
 ET_ZONE = ZoneInfo("America/New_York")
 _EXPECTED_RTH_BARS = 390
@@ -160,6 +161,11 @@ class DataQualityChecker:
 
         rows_after = len(working)
         dropped_days = tuple(gapless_details.get("dropped_days", []))
+        # Final check of the schema
+        missing_cols = CLEAN_DF_COLS - set(working.columns)
+        if missing_cols:
+            raise KeyError(f"Missing columns in the clean dataframe: {sorted(missing_cols)}")
+
         report = DataQualityReport(
             passed=all_passed,
             checks=tuple(checks),
@@ -200,6 +206,10 @@ class DataQualityChecker:
             frame["symbol"] = frame["symbol"].astype(str)
         frame.sort_values(["symbol", "timestamp"], inplace=True)
         frame.reset_index(drop=True, inplace=True)
+
+        # Add is_rth column
+        time_et = frame["timestamp"].dt.time
+        frame["is_rth"] = (time_et >= time(9, 30)) & (time_et <= time(16, 0))
 
     def _check_monotonicity(self, frame: pd.DataFrame) -> tuple[bool, dict[str, Any]]:
         duplicates = int(frame.duplicated(subset=["symbol", "timestamp"]).sum())

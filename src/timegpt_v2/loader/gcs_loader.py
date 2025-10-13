@@ -16,7 +16,7 @@ def enumerate_month_uris(
     while current_dt <= end_dt:
         yyyy = current_dt.year
         mm = current_dt.month
-        yyyy_mm = f"{yyyy}_{mm:02d}"
+        yyyy_mm = f"{yyyy}-{mm:02d}"
         uri = template.format(ticker=symbol, yyyy=yyyy, yyyy_mm=yyyy_mm)
         yield uri
         # Move to the next month

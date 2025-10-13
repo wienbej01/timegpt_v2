@@ -1,0 +1,8 @@
+api_mode: online
+api_budget: { per_run: 6, per_day: 12, cooldown_sec: 1 }
+min_obs_subhourly: 360
+rolling_history_days: 3
+snapshot_preset: baseline
+snapshot_presets: [{ name: baseline, times: ["14:30"], active_windows: [{start: "09:45", end: "15:30"}], max_snapshots_per_day: 1, horizon_min: 15 }]
+use_exogs: false
+quantiles: [0.25, 0.5, 0.75]

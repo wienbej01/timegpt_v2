@@ -52,12 +52,7 @@ class Trade:
         return delta.total_seconds() / 60.0
 
 
-class ForecastRow(NamedTuple):
-    snapshot_ts: pd.Timestamp
-    symbol: str
-    q25: float
-    q50: float
-    q75: float
+
 
 
 class BacktestSimulator:
@@ -101,8 +96,7 @@ class BacktestSimulator:
                 else:
                     open_positions.pop(sym, None)
 
-            for row_tuple in snapshot_group.itertuples(index=False, name="ForecastRow"):
-                row = cast(ForecastRow, row_tuple)
+            for row in snapshot_group.itertuples(index=False):
                 symbol = row.symbol
                 if len(open_positions.get(symbol, [])) >= self.rules.max_open_per_symbol:
                     continue
@@ -120,11 +114,11 @@ class BacktestSimulator:
                     continue
 
                 last_price = float(price_series.loc[snapshot_ts])
+                
+                quantiles = {float(q.replace("q", ""))/100: getattr(row, q) for q in row._fields if q.startswith("q") and q[1:].isdigit()}
                 signal = self.rules.get_entry_signal(
                     self.params,
-                    q25=row.q25,
-                    q50=row.q50,
-                    q75=row.q75,
+                    quantiles=quantiles,
                     last_price=last_price,
                     sigma_5m=sigma_snapshot,
                     tick_size=self.tick_size,
@@ -170,11 +164,16 @@ class BacktestSimulator:
             working = working.rename(columns={"ts_utc": "snapshot_utc"})
         working["snapshot_ts"] = pd.to_datetime(working["snapshot_utc"], utc=True)
         working["symbol"] = working["symbol"].astype(str)
-        expected_cols = {"snapshot_ts", "symbol", "q25", "q50", "q75"}
+        
+        quantile_cols = [col for col in working.columns if col.startswith("q")]
+        if not quantile_cols:
+            raise ValueError("No quantile columns found in forecasts")
+
+        expected_cols = {"snapshot_ts", "symbol"} | set(quantile_cols)
         missing = expected_cols - set(working.columns)
         if missing:
             raise ValueError(f"Forecasts missing required columns: {sorted(missing)}")
-        return working[["snapshot_ts", "symbol", "q25", "q50", "q75"]].sort_values(
+        return working[["snapshot_ts", "symbol", *quantile_cols]].sort_values(
             ["snapshot_ts", "symbol"]
         )
 

@@ -27,9 +27,7 @@ class TradingRules:
     def get_entry_signal(
         self,
         params: RuleParams,
-        q25: float,
-        q50: float,
-        q75: float,
+        quantiles: dict[float, float],
         last_price: float,
         sigma_5m: float,
         tick_size: float,
@@ -40,10 +38,12 @@ class TradingRules:
         cost_return = costs_bps / 10_000.0
 
         sigma_return = max(float(sigma_5m), 1e-9)
-        q50_return = float(q50)
-        
-        q25_return = float(q25)
-        q75_return = float(q75)
+        q50_return = quantiles.get(0.5)
+        if q50_return is None:
+            return 0.0
+
+        q25_return = quantiles.get(0.25, q50_return)
+        q75_return = quantiles.get(0.75, q50_return)
 
         # Uncertainty suppression: wide intervals indicate high uncertainty
         spread = q75_return - q25_return

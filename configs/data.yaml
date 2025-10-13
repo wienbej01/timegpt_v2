@@ -1,4 +1,4 @@
 gcs:
   bucket: /home/jacobw/gcs-mount/bronze
-  template: "stocks/1m/{ticker}/{yyyy}/{ticker}_{yyyy_dash_mm}.parquet"
+  template: "stocks/1m/{ticker}/{yyyy}/{ticker}_{yyyy_mm}.parquet"
   skip_timestamp_normalization: true

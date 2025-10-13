@@ -180,8 +180,11 @@ def _iter_chunks(items: Sequence[str], size: int) -> Iterable[list[str]]:
 @app.command(name="check-data")
 def check_data(
     config_dir: Path = CONFIG_DIR_OPTION,
-    universe_config: str = typer.Option(
-        "universe.yaml", "--universe-config", help="Universe config file name"
+    config_name: str = typer.Option(
+        "forecast.yaml", "--config-name", help="Forecast config file name"
+    ),
+    universe_name: str = typer.Option(
+        "universe.yaml", "--universe-name", help="Universe config file name"
     ),
     run_id: str = RUN_ID_OPTION,
 ) -> None:
@@ -194,10 +197,10 @@ def check_data(
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / "loader.log"
 
-    universe_cfg = _load_yaml(config_dir / universe_config)
+    universe_cfg = _load_yaml(config_dir / universe_name)
     data_cfg = _load_yaml(config_dir / "data.yaml")
     policy_cfg = _load_yaml(config_dir / "dq_policy.yaml")
-    forecast_cfg = _load_yaml(config_dir / "forecast.yaml")
+    forecast_cfg = _load_yaml(config_dir / config_name)
 
     tickers_raw = universe_cfg.get("tickers", [])
     if not isinstance(tickers_raw, Sequence):
@@ -312,6 +315,12 @@ def build_features(
 @app.command()
 def forecast(
     config_dir: Path = CONFIG_DIR_OPTION,
+    config_name: str = typer.Option(
+        "forecast.yaml", "--config-name", help="Forecast config file name"
+    ),
+    universe_name: str = typer.Option(
+        "universe.yaml", "--universe-name", help="Universe config file name"
+    ),
     run_id: str = RUN_ID_OPTION,
     api_mode: str = typer.Option(
         None, "--api-mode", help="API mode (online/offline). Overrides config."
@@ -354,7 +363,7 @@ def forecast(
     if "timestamp" not in features.columns or "symbol" not in features.columns:
         raise typer.BadParameter("features.parquet must include 'timestamp' and 'symbol' columns")
 
-    forecast_cfg = _load_yaml(config_dir / "forecast.yaml")
+    forecast_cfg = _load_yaml(config_dir / config_name)
     
     # Override config with CLI options if provided
     if api_mode is not None:
@@ -537,6 +546,7 @@ def forecast(
             forecast_cfg.get("max_total_snapshots"), field="max_total_snapshots"
         )
 
+    universe_cfg = _load_yaml(config_dir / universe_name)
     trade_dates = sorted(features["timestamp_et"].dt.date.unique())
     holidays = get_trading_holidays(years=sorted(list(set(d.year for d in trade_dates))))
     scheduler = ForecastScheduler(
@@ -606,7 +616,7 @@ def forecast(
         preset_name,
     )
     
-    exog_config = load_forecast_exog_config(config_dir / "forecast.yaml")
+    exog_config = load_forecast_exog_config(config_dir / config_name)
 
     if use_exogs is not None:
         exog_config.use_exogs = use_exogs

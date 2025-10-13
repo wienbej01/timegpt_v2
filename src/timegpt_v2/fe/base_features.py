@@ -10,6 +10,7 @@ import pandas as pd
 
 from timegpt_v2.fe import deterministic
 from timegpt_v2.fe.context import FeatureContext, apply_context_features
+from timegpt_v2.utils.col_schema import FEATURE_MATRIX_COLS, RAW_DATA_COLS
 
 _LOG_EPS = 1e-12
 
@@ -62,7 +63,7 @@ def build_feature_matrix(
         .sort_values(["symbol", "timestamp"])  # deterministic order
         .reset_index(drop=True)
     )
-    required = {"timestamp", "symbol", "open", "high", "low", "close", "volume"}
+    required = RAW_DATA_COLS
     missing = required - set(working.columns)
     if missing:
         raise ValueError(f"Missing required columns for feature generation: {sorted(missing)}")
@@ -81,7 +82,15 @@ def build_feature_matrix(
         context = replace(context, market_data=bars)
     features = apply_context_features(features, context)
 
+    features["timestamp_et"] = features["timestamp"].dt.tz_convert("America/New_York")
+
     features = _drop_sparse_rows(features)
+
+    # Final check of the schema
+    missing_cols = FEATURE_MATRIX_COLS - set(features.columns)
+    if missing_cols:
+        raise KeyError(f"Missing columns in the feature matrix: {sorted(missing_cols)}")
+
     return features.reset_index(drop=True)
 
 
@@ -198,7 +207,7 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
     feature_cols.extend(
         col
         for col in local.columns
-        if col not in feature_cols and col not in {"open", "high", "low", "close", "volume"}
+        if col not in feature_cols
     )
 
     # Drop rows with undefined target to avoid leakage downstream.

@@ -27,12 +27,16 @@ def build_y_df(
     target_column: str = "target_log_return_1m",
     rolling_window_days: int = 40,
     min_obs_subhourly: int = 1008,
+    symbols: Iterable[str] | None = None,
 ) -> pd.DataFrame:
     """Return the ``y`` frame for TimeGPT up to *snapshot_ts* (inclusive) with rolling window."""
     if target_column not in features.columns:
         raise KeyError(f"Target column '{target_column}' missing from features")
 
     working = features.copy()
+    if symbols is not None:
+        working = working[working["symbol"].isin(symbols)]
+
     working["timestamp"] = pd.to_datetime(working["timestamp"], utc=True)
     cutoff = pd.to_datetime(snapshot_ts, utc=True)
 
@@ -68,7 +72,15 @@ def build_y_df(
     # Forward fill y for non-trading hours to avoid NaN in target
     renamed["y"] = renamed.groupby("unique_id")["y"].ffill()
 
+    exog_cols = [col for col in EXOGENOUS_FEATURE_COLUMNS if col in renamed.columns]
+    if exog_cols:
+        renamed[exog_cols] = renamed.groupby("unique_id")[exog_cols].ffill()
+
     cols_to_select = ["unique_id", "ds", "y"]
+    exog_cols = [col for col in EXOGENOUS_FEATURE_COLUMNS if col in renamed.columns]
+    if exog_cols:
+        cols_to_select.extend(exog_cols)
+
     return renamed[cols_to_select].reset_index(drop=True)
 
 
