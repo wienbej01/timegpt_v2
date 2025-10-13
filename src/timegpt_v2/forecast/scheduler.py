@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+import logging
+from collections.abc import Iterable, Sequence
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -75,6 +76,34 @@ class ForecastScheduler:
             if start <= snapshot_time <= end:
                 return True
         return False
+
+
+def iter_snapshots(
+    features: pd.DataFrame,
+    scheduler: ForecastScheduler,
+    min_obs_subhourly: int,
+    logger: logging.Logger,
+) -> Iterable[tuple[str, datetime]]:
+    """
+    Iterate through snapshots and symbols, applying a warm-up gate.
+
+    This function yields (symbol, snapshot_ts) tuples for combinations that have
+    enough historical data.
+    """
+    all_symbols = sorted(features["symbol"].unique())
+    for snapshot_ts in scheduler.generate_snapshots():
+        for symbol in all_symbols:
+            prior_rows = features[
+                (features["timestamp"] < snapshot_ts)
+                & (features["symbol"] == symbol)
+                & (features["is_rth"])
+            ]
+            if len(prior_rows) < min_obs_subhourly:
+                logger.info(
+                    f"SKIP snapshot {snapshot_ts} {symbol} --- history {len(prior_rows)} < {min_obs_subhourly}"
+                )
+                continue
+            yield symbol, snapshot_ts
 
 
 def get_trading_holidays(years: Sequence[int]) -> list[date]:

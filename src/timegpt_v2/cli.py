@@ -74,7 +74,11 @@ from timegpt_v2.fe.base_features import build_feature_matrix
 from timegpt_v2.fe.context import FeatureContext
 
 from timegpt_v2.forecast.scaling import TargetScaler, TargetScalingConfig
-from timegpt_v2.forecast.scheduler import ForecastScheduler, get_trading_holidays
+from timegpt_v2.forecast.scheduler import (
+    ForecastScheduler,
+    get_trading_holidays,
+    iter_snapshots,
+)
 from timegpt_v2.forecast.sweep import ForecastGridSearch, ForecastGridSpec
 from timegpt_v2.forecast.timegpt_client import (
     NixtlaTimeGPTBackend,
@@ -545,7 +549,7 @@ def forecast(
         max_total_snapshots=max_snapshots_total,
         skip_dates=sorted(skip_dates),
     )
-    snapshots = scheduler.generate_snapshots()
+
 
     logger = _configure_logger(logs_dir / "forecast.log", name="timegpt_v2.forecast")
     cache = ForecastCache(forecasts_dir / "cache", logger=logger)
@@ -633,51 +637,44 @@ def forecast(
     max_batch_size = max_batch_size_raw if max_batch_size_raw > 0 else len(expected_symbols)
     max_batch_size = max(max_batch_size, 1)
 
-    for snapshot_local in snapshots:
+    min_samples = forecast_cfg.get("min_obs_subhourly", 25)
+    snapshot_iterator = iter_snapshots(
+        features=features,
+        scheduler=scheduler,
+        min_obs_subhourly=min_samples,
+        logger=logger,
+    )
+
+    for symbol, snapshot_local in snapshot_iterator:
         snapshot_utc = pd.Timestamp(snapshot_local).tz_convert("UTC")
         history = build_y_df(
             features,
             snapshot_utc,
             target_column=scaler.target_column,
             rolling_window_days=forecast_cfg.get("rolling_history_days", 90),
+            symbols=[symbol],
         )
         if history.empty:
             continue
-        latest = history.groupby("unique_id")["ds"].max()
-        if not (latest == snapshot_utc).all():
-            continue
-        available_ids = sorted(str(uid) for uid in latest.index)
-        # Skip snapshots with insufficient history for TimeGPT prediction intervals
-        min_samples = forecast_cfg.get("min_obs_subhourly", 25)
-        symbol_counts = history.groupby("unique_id").size()
-        if (symbol_counts < min_samples).any():
-            logger.warning(
-                f"Skipping snapshot {snapshot_utc}: insufficient history (< {min_samples} samples for symbols: "
-                f"{sorted(symbol_counts[symbol_counts < min_samples].index.tolist())}"
-            )
-            continue
 
-        chunk_size = forecast_cfg.get("unique_id_chunk_size") or max_batch_size
-        for chunk_ids in _iter_chunks(available_ids, chunk_size):
-            history_chunk = history[history["unique_id"].isin(chunk_ids)].copy()
-            future_chunk = build_x_df_for_horizon(
-                features,
-                snapshot_utc,
-                horizon,
-                symbols=chunk_ids,
-            )
-            forecast_df = client.forecast(
-                history_chunk,
-                future_chunk,
-                features=features,
-                snapshot_ts=snapshot_utc,
-                run_id=run_id,
-                horizon=horizon,
-                freq=freq,
-                quantiles=quantiles,
-            )
-            forecast_df["snapshot_utc"] = snapshot_utc
-            results.append(forecast_df)
+        future_chunk = build_x_df_for_horizon(
+            features,
+            snapshot_utc,
+            horizon,
+            symbols=[symbol],
+        )
+        forecast_df = client.forecast(
+            history,
+            future_chunk,
+            features=features,
+            snapshot_ts=snapshot_utc,
+            run_id=run_id,
+            horizon=horizon,
+            freq=freq,
+            quantiles=quantiles,
+        )
+        forecast_df["snapshot_utc"] = snapshot_utc
+        results.append(forecast_df)
 
     if not results:
         raise typer.Exit(code=1)
