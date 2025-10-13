@@ -18,8 +18,8 @@ import pandas as pd
 from timegpt_v2.config.model import ForecastExogConfig
 from timegpt_v2.forecast.batcher import build_batches
 from timegpt_v2.forecast.exogenous import (
-    build_future_frame,
     estimate_payload_bytes,
+    merge_future_exogs,
     merge_history_exogs,
     normalize_names,
     preflight_log,
@@ -357,13 +357,15 @@ class TimeGPTClient:
             )
 
             # Build future frame
-            x_batch_exog = build_future_frame(
-                x_batch,
-                features,
-                futr_exog_declared,
-                self._config.exog.strict_exog,
-                self._logger,
-            )
+            if futr_exog_declared:
+                x_batch_exog = merge_future_exogs(
+                    x_df=x_batch,
+                    features_df=features,
+                    futr_exogs=futr_exog_declared,
+                    strict=True,  # ensure event flags present; default False if missing
+                )
+            else:
+                x_batch_exog = x_batch
 
             y_shape_after = y_batch_exog.shape
             x_shape_after = x_batch_exog.shape if x_batch_exog is not None else (0, 0)
@@ -400,13 +402,14 @@ class TimeGPTClient:
             }
 
             # Final check of the schema
-            missing_y_cols = ALL_EXOG_COLS - set(y_batch_exog.columns)
+            missing_y_cols = set(hist_exog_declared) - set(y_batch_exog.columns)
             if missing_y_cols:
                 raise KeyError(f"Missing columns in the y_batch_exog: {sorted(missing_y_cols)}")
-            
-            missing_x_cols = ALL_EXOG_COLS - set(x_batch_exog.columns)
-            if missing_x_cols:
-                raise KeyError(f"Missing columns in the x_batch_exog: {sorted(missing_x_cols)}")
+
+            if x_batch_exog is not None:
+                missing_x_cols = set(futr_exog_declared) - set(x_batch_exog.columns)
+                if missing_x_cols:
+                    raise KeyError(f"Missing columns in the x_batch_exog: {sorted(missing_x_cols)}")
 
             # Write metadata to file
             run_dir = Path("artifacts") / "runs" / run_id
@@ -415,7 +418,7 @@ class TimeGPTClient:
             with meta_exogs_path.open("w", encoding="utf-8") as f:
                 json.dump(meta_exogs, f, indent=2)
 
-        hist_exog_list_final = [c for c in y_batch_exog.columns if c not in ["unique_id", "ds", "y"]]
+        hist_exog_list_final = hist_exog_present
 
         try:
             if estimate_payload_bytes(y_batch_exog) + estimate_payload_bytes(x_batch_exog) > self._config.max_bytes_per_call:
