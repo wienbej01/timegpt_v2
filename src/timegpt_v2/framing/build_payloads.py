@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Iterable
 from datetime import timedelta
 
@@ -81,7 +83,17 @@ def build_y_df(
     if exog_cols:
         cols_to_select.extend(exog_cols)
 
-    return renamed[cols_to_select].reset_index(drop=True)
+    result = renamed[cols_to_select].reset_index(drop=True)
+
+    # Log payload columns if PAYLOAD_LOG is enabled
+    if os.environ.get("PAYLOAD_LOG", "0") == "1":
+        logger = logging.getLogger("timegpt_v2.build_payloads")
+        logger.info(
+            "PAYLOAD y_df cols=%s",
+            str(list(result.columns))
+        )
+
+    return result
 
 
 def build_x_df_for_horizon(
@@ -123,7 +135,17 @@ def build_x_df_for_horizon(
 
     ordered_cols = ["unique_id", "ds"]
     combined.sort_values(["unique_id", "ds"], inplace=True)
-    return combined[ordered_cols].reset_index(drop=True)
+    result = combined[ordered_cols].reset_index(drop=True)
+
+    # Log payload columns if PAYLOAD_LOG is enabled
+    if os.environ.get("PAYLOAD_LOG", "0") == "1":
+        logger = logging.getLogger("timegpt_v2.build_payloads")
+        logger.info(
+            "PAYLOAD x_df cols=%s",
+            str(list(result.columns))
+        )
+
+    return result
 
 
 __all__ = ["build_y_df", "build_x_df_for_horizon"]
