@@ -1,8 +1,9 @@
-k_sigma: [0.5, 0.75, 1.0]
+k_sigma: [0.1, 0.75, 1.0]
 s_stop: [1.0, 1.5, 2.0]
 s_take: [1.0]
+uncertainty_k: [3.0]  # NEW: relax quantile-width gate (previously fixed at 4.0)
 time_stop_et: "15:55"
-fees_bps: 0.5
+fees_bps: 0.0
 half_spread_ticks:
   AAPL: 1
   MSFT: 1

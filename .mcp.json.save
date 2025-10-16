@@ -1,0 +1,46 @@
+{
+  "mcpServers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
+      }
+    },
+    "polygon": {
+      "type": "http",
+      "url": "https://mcp.polygon.io/mcp",
+      "headers": {
+        "Authorization": "Bearer ${POLYGON_API_KEY}"
+      }
+    },
+    "alpaca": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@alpacahq/alpaca-mcp-server"
+      ],
+      "env": {
+        "APCA_API_KEY_ID": "${APCA_API_KEY_ID}",
+        "APCA_API_SECRET_KEY": "${APCA_API_SECRET_KEY}",
+        "APCA_API_BASE_URL": "${APCA_API_BASE_URL:-https://paper-api.alpaca.markets}"
+      }
+    },
+    "ibkr": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-e",
+        "TWS_HOST=${TWS_HOST:-127.0.0.1}",
+        "-e",
+        "TWS_PORT=${TWS_PORT:-7497}",
+        "rcontesti/ib_mcp"
+      ]
+    }
+  }
+}

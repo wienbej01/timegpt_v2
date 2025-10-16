@@ -1,0 +1,4 @@
+tickers: [TSLA]
+dates: { start: "2025-01-02", end: "2025-02-15" }
+tz: America/New_York
+rth: { open: "09:30", close: "16:00" }

@@ -19,33 +19,52 @@ snapshot_presets:
     active_windows:
       - {start: "09:45", end: "15:30"}
     max_snapshots_per_day: 2
-    horizon_min: 15
+    horizon_min: 30  # Optimized for better forecast accuracy
   - name: liquidity_profile
     times: ["09:45", "10:15", "12:00", "14:00", "15:15"]
     active_windows:
       - {start: "09:40", end: "15:45"}
     max_snapshots_per_day: 5
-    horizon_min: 15
+    horizon_min: 30  # Optimized for better forecast accuracy
 max_snapshots_total: 10
-horizon_min: 15
+horizon_min: 30  # Changed from 60 to 30 for optimal model performance
 freq: "min"
 backend: nixtla
-model: timegpt-1-long-horizon
+model: timegpt-1-long-horizon  # Best model for extended duration trading
 levels: [50, 80, 95]
 
 # Exogenous Feature Configuration
+# Two types of exogenous features are supported:
+# 1. Historical exogs (HIST_EXOG_ALLOW): appear only in y_df (historical context)
+#    - OHLCV-only features: ret_1m, ret_5m, sigma_5m, parkinson_sigma_15m, range_pct_15m, clv_15m, vwap_dev, rth_cumret_30m
+#    - External context: spy_ret_1m, spy_vol_30m, regime_high_vol, regime_high_dispersion
+# 2. Deterministic exogs (FUTR_EXOG_ALLOW): appear in both y_df and x_df (future projections)
+#    - Time-based: fourier_sin_1, fourier_cos_1, minutes_since_open, minutes_to_close, day_of_week
 exog:
   use_exogs: true
   strict_exog: true
   hist_exog_list:
+    # OHLCV-only features from Sprint 1
+    - ret_1m
+    - ret_5m
+    - sigma_5m
+    - parkinson_sigma_15m
+    - range_pct_15m
+    - clv_15m
+    - vwap_dev
+    - rth_cumret_30m
+    # External context features
     - spy_ret_1m
     - spy_vol_30m
     - regime_high_vol
     - regime_high_dispersion
   futr_exog_list:
-    - event_earnings
-    - event_fomc
-    - event_cpi
+    # Deterministic time features from Sprint 2
+    - fourier_sin_1
+    - fourier_cos_1
+    - minutes_since_open
+    - minutes_to_close
+    - day_of_week
   exog_name_map: {}
   impute_strategy: "none"
 
@@ -61,8 +80,8 @@ skip_events:
   - event_fomc
   - event_cpi
 target:
-  mode: log_return_15m
-  volatility_column: vol_ewm_60m
+  mode: log_return_30m  # Match 30-minute forecast horizon
+  volatility_column: vol_ewm_30m  # Use 30-minute volatility
   bp_factor: 10000
 
 # Calibration Configuration

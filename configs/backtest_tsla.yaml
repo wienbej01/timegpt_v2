@@ -1,0 +1,55 @@
+# TSLA Backtest Configuration
+# Optimized for February 1-15, 2024 test period
+
+# Phase definitions for evaluation
+phases:
+  - name: "feb2024_test"
+    start_date: "2024-02-01"
+    end_date: "2024-02-15"
+    description: "TSLA February 2024 test period"
+
+# Evaluation settings
+evaluation:
+  # Trading metrics
+  metrics:
+    - "sharpe_ratio"
+    - "sortino_ratio"
+    - "max_drawdown"
+    - "hit_rate"
+    - "avg_trade_pnl"
+    - "total_pnl"
+    - "num_trades"
+    - "avg_holding_period"
+
+  # Forecast metrics
+  forecast_metrics:
+    - "mae"
+    - "rmse"
+    - "mape"
+    - "quantile_coverage"
+    - "pit_histogram"
+
+  # Calibration metrics
+  calibration_metrics:
+    - "calibration_error"
+    - "conformal_coverage"
+
+# Risk management settings
+risk_management:
+  max_position_size: 1.0
+  max_portfolio_risk: 0.20
+  max_drawdown_threshold: 0.15
+
+# Report settings
+reports:
+  include_trades: true
+  include_forecasts: true
+  include_calibration: true
+  include_performance_charts: true
+
+# Output settings
+output:
+  save_trades: true
+  save_forecasts: true
+  save_performance: true
+  save_calibrations: true

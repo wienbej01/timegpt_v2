@@ -1,0 +1,11 @@
+k_sigma: [0.25]
+s_stop: [1.5]
+s_take: [0.75]
+uncertainty_k: [3.0]
+time_stop_et: "15:55"
+fees_bps: 0.5
+half_spread_ticks: { AAPL: 1 }
+max_open_per_symbol: 1
+daily_trade_cap: 3
+no_trade: { earnings: true, fomc: true, cpi: true, buffer_min: 10 }
+tick_size: 0.01

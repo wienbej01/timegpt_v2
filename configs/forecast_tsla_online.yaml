@@ -1,0 +1,85 @@
+# TSLA Online Forecast Configuration
+# Optimized for February 1-15, 2024 testing period
+
+# TimeGPT API Configuration
+api_mode: "online"  # Use live TimeGPT API
+api_budget:
+  per_run: 10       # Reduced for single symbol
+  per_day: 20       # Conservative daily limit
+  cooldown_sec: 1
+batch_multi_series: false  # Single symbol, no batching needed
+max_bytes_per_call: 50_000_000  # Reduced for single symbol
+rolling_history_days: 30  # 30 days history for context
+quantiles: [0.25, 0.5, 0.75]  # Standard quantiles
+min_obs_subhourly: 48  # Reduced for single symbol test
+
+# Snapshot and Model Configuration
+snapshot_preset: baseline
+snapshot_presets:
+  - name: baseline
+    times: ["10:00", "14:30"]  # Two snapshots per day
+    active_windows:
+      - {start: "09:45", end: "15:30"}
+    max_snapshots_per_day: 2
+    horizon_min: 30  # 30-minute optimized horizon
+max_snapshots_total: 10
+horizon_min: 30  # Optimized for 30-minute forecasts
+freq: "min"
+backend: nixtla
+model: timegpt-1-long-horizon  # Best model for 30-minute horizon
+levels: [50, 80, 95]
+
+# Exogenous Feature Configuration
+exog:
+  use_exogs: true
+  strict_exog: true
+  hist_exog_list:
+    # Core OHLCV features
+    - ret_1m
+    - ret_5m
+    - sigma_5m
+    - parkinson_sigma_15m
+    - range_pct_15m
+    - clv_15m
+    - vwap_dev
+    - rth_cumret_30m
+    # Market context
+    - spy_ret_1m
+    - spy_vol_30m
+    - regime_high_vol
+    - regime_high_dispersion
+  futr_exog_list:
+    # Deterministic time features
+    - fourier_sin_1
+    - fourier_cos_1
+    - minutes_since_open
+    - minutes_to_close
+    - day_of_week
+  exog_name_map: {}
+  impute_strategy: "none"
+
+# Retry and Cache Configuration
+retry:
+  max: 3
+  backoff_sec: 2
+cache: true  # Cache API responses
+tz: America/New_York
+
+# Event and Target Configuration
+skip_events:
+  - event_fomc
+  - event_cpi
+target:
+  mode: log_return_30m  # 30-minute optimized target
+  volatility_column: vol_ewm_30m  # 30-minute volatility
+  bp_factor: 10000
+
+# Calibration Configuration
+calibration:
+   method: affine
+   min_samples: 1
+   calibration_window_days: 15  # Reduced for test period
+   model_path: models/calibration.json
+   conformal_fallback: false
+   pit_deviation_threshold: 0.03
+   conformal_window: 30

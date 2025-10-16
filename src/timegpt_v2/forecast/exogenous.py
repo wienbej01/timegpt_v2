@@ -153,13 +153,37 @@ def merge_future_exogs(
     """
     Left-join future exogs onto the future frame (x_df) on ['unique_id','ds'].
     For boolean event flags, default missing to False when strict=True.
+    Uses controlled suffixes to avoid _x/_y ambiguity like merge_history_exogs.
     """
     if not futr_exogs:
         return x_df
 
     needed_cols = ["unique_id", "ds"] + [c for c in futr_exogs if c in features_df.columns]
     feats = features_df[needed_cols].copy()
-    out = x_df.merge(feats, on=["unique_id", "ds"], how="left")
+
+    # Merge with controlled suffixes to avoid _x/_y ambiguity (same as merge_history_exogs)
+    out = x_df.merge(
+        feats,
+        on=["unique_id", "ds"],
+        how="left",
+        suffixes=("", "_feat"),
+    )
+
+    # Coalesce any existing columns in x_df with the _feat columns from features_df
+    for c in futr_exogs:
+        base = c
+        feat = f"{c}_feat"
+
+        if base in out.columns and feat in out.columns:
+            # x_df value wins unless NaN, then take features
+            out[base] = out[base].where(~out[base].isna(), out[feat])
+            out.drop(columns=[feat], inplace=True)
+        elif feat in out.columns and base not in out.columns:
+            # Only features had it; rename to bare name
+            out.rename(columns={feat: base}, inplace=True)
+        elif base not in out.columns:
+            # Neither side had it; create it as NaN to allow downstream handling
+            out[base] = np.nan
 
     if strict:
         for c in futr_exogs:

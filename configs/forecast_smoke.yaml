@@ -1,0 +1,77 @@
+# TimeGPT API and Batching Configuration
+api_mode: "online"  # "offline" | "online"
+api_budget:
+  per_run: 10
+  per_day: 100
+  cooldown_sec: 1
+batch_multi_series: true
+max_bytes_per_call: 150_000_000  # Safety threshold for payload size
+num_partitions_default: null  # Optional default for num_partitions
+rolling_history_days: 20  # Cap history to control payload size
+quantiles: [0.25, 0.5, 0.75]  # Keep small to reduce response size
+min_obs_subhourly: 200
+
+# Snapshot and Model Configuration
+snapshot_preset: baseline
+snapshot_presets:
+  - name: baseline
+    times: ["10:00", "14:30"]
+    active_windows: [{start: "09:40", end: "15:45"}]
+    max_snapshots_per_day: 2
+    horizon_min: 15
+# max_snapshots_total: 6  # Removed - let's test full dataset
+horizon_min: 15
+freq: "min"
+backend: nixtla
+model: timegpt-1-long-horizon
+levels: [50, 80, 95]
+
+# Exogenous Feature Configuration
+# Updated to use new OHLCV-only feature allow-lists from Sprint 1-3
+exog:
+  use_exogs: true
+  strict_exog: true
+  hist_exog_list:
+    # OHLCV-only features from Sprint 1
+    - ret_1m
+    - ret_5m
+    - sigma_5m
+    - parkinson_sigma_15m
+    - range_pct_15m
+    - clv_15m
+    - vwap_dev
+    - rth_cumret_30m
+    # External context features
+    - spy_ret_1m
+    - spy_vol_30m
+    - regime_high_vol
+    - regime_high_dispersion
+  futr_exog_list:
+    # Deterministic time features from Sprint 2
+    - fourier_sin_1
+    - fourier_cos_1
+    - minutes_since_open
+    - minutes_to_close
+    - day_of_week
+  impute_strategy: "none"
+
+# Retry and Cache Configuration
+retry: { max: 3, backoff_sec: 2 }
+cache: true
+tz: America/New_York
+
+# Event and Target Configuration
+skip_events: [event_fomc, event_cpi]
+target:
+  mode: log_return_15m
+  volatility_column: vol_ewm_60m
+  bp_factor: 10000
+
+# Calibration Configuration
+calibration:
+  method: affine
+  min_samples: 1
+  calibration_window_days: 20
+  conformal_fallback: false
+  pit_deviation_threshold: 0.03
+  conformal_window: 30

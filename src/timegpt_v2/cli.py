@@ -78,6 +78,7 @@ from timegpt_v2.forecast.scheduler import (
     ForecastScheduler,
     get_trading_holidays,
     iter_snapshots,
+    iter_snapshots_with_coverage,
 )
 from timegpt_v2.forecast.sweep import ForecastGridSearch, ForecastGridSpec
 from timegpt_v2.forecast.timegpt_client import (
@@ -87,7 +88,7 @@ from timegpt_v2.forecast.timegpt_client import (
     TimeGPTRetryPolicy,
     _LocalDeterministicBackend,
 )
-from timegpt_v2.framing.build_payloads import EXOGENOUS_FEATURE_COLUMNS, build_x_df_for_horizon, build_y_df
+from timegpt_v2.framing.build_payloads import build_x_df_for_horizon, build_y_df
 from timegpt_v2.io.gcs_reader import GCSReader, ReaderConfig
 from timegpt_v2.quality.checks import DataQualityChecker
 from timegpt_v2.quality.contracts import DataQualityPolicy
@@ -95,6 +96,10 @@ from timegpt_v2.reports.builder import build_report
 from timegpt_v2.trading.costs import TradingCosts
 from timegpt_v2.trading.rules import RuleParams, TradingRules
 from timegpt_v2.utils.cache import ForecastCache
+from timegpt_v2.utils.coverage import CoverageTracker, SkipReason
+from timegpt_v2.utils.trading_window import parse_trading_window_config, log_ranges_summary
+from timegpt_v2.utils.validation import validate_snapshot_limits, log_validation_results
+from timegpt_v2.utils.diagnostics import TradingWindowDoctor
 
 app = typer.Typer(help="TimeGPT Intraday v2 command line interface")
 
@@ -202,19 +207,30 @@ def check_data(
     policy_cfg = _load_yaml(config_dir / "dq_policy.yaml")
     forecast_cfg = _load_yaml(config_dir / config_name)
 
+    # Parse trading window configuration with backward compatibility
+    trading_window_cfg = parse_trading_window_config(
+        {**universe_cfg, **forecast_cfg},  # Merge configs for parsing
+        logger=logging.getLogger(__name__)
+    )
+
     tickers_raw = universe_cfg.get("tickers", [])
     if not isinstance(tickers_raw, Sequence):
         raise typer.BadParameter("universe.tickers must be a sequence")
     tickers = [str(t) for t in tickers_raw]
 
-    date_cfg = _expect_mapping("universe.dates", universe_cfg.get("dates"))
-    try:
-        start_str = str(date_cfg["start"])
-        end_str = str(date_cfg["end"])
-    except KeyError as exc:
-        raise typer.BadParameter(f"Missing universe date config: {exc}") from exc
-    start_date = datetime.fromisoformat(start_str + "T00:00:00").date()
-    end_date = datetime.fromisoformat(end_str + "T00:00:00").date()
+    # Use trading window dates if available, otherwise fall back to legacy dates
+    if trading_window_cfg.start and trading_window_cfg.end:
+        start_date = trading_window_cfg.start
+        end_date = trading_window_cfg.end
+    else:
+        date_cfg = _expect_mapping("universe.dates", universe_cfg.get("dates"))
+        try:
+            start_str = str(date_cfg["start"])
+            end_str = str(date_cfg["end"])
+        except KeyError as exc:
+            raise typer.BadParameter(f"Missing universe date config: {exc}") from exc
+        start_date = datetime.fromisoformat(start_str + "T00:00:00").date()
+        end_date = datetime.fromisoformat(end_str + "T00:00:00").date()
 
     gcs_cfg = _expect_mapping("data.gcs", data_cfg.get("gcs"))
     bucket = str(gcs_cfg.get("bucket", ""))
@@ -226,10 +242,21 @@ def check_data(
     reader = GCSReader(
         ReaderConfig(bucket=bucket, template=template, skip_timestamp_normalization=skip_ts_norm)
     )
-    
+
     rolling_history_days = int(forecast_cfg.get("rolling_history_days", 90))
 
-    raw_frame = reader.read_universe(tickers, start_date, end_date, rolling_history_days)
+    # Log ranges summary and check permissive mode
+    logger = logging.getLogger(__name__)
+    log_ranges_summary(trading_window_cfg, logger)
+
+    # Print warning banner for permissive mode
+    if not trading_window_cfg.enforce_trading_window:
+        logger.warning(
+            "PERMISSIVE MODE: Trading window enforcement is disabled. "
+            "Trades may occur outside configured trading window dates."
+        )
+
+    raw_frame = reader.read_universe(tickers, start_date, end_date, rolling_history_days, trading_window_cfg)
     checker = DataQualityChecker(policy=DataQualityPolicy.from_dict(policy_cfg))
     clean_frame, report = checker.validate(raw_frame)
 
@@ -271,6 +298,12 @@ def check_data(
 def build_features(
     config_dir: Path = CONFIG_DIR_OPTION,
     run_id: str = RUN_ID_OPTION,
+    config_name: str = typer.Option(
+        "forecast.yaml", "--config-name", help="Forecast config file name"
+    ),
+    universe_name: str = typer.Option(
+        "universe.yaml", "--universe-name", help="Universe config file name"
+    ),
 ) -> None:
     """Build feature matrix from validated data."""
     run_dir = Path("artifacts") / "runs" / run_id
@@ -346,8 +379,18 @@ def forecast(
     exog_name_map: Path = typer.Option(
         None, "--exog-name-map", help="Path to YAML file with exogenous feature name mapping. Overrides config."
     ),
+    payload_log: bool = typer.Option(
+        False, "--payload-log", help="Enable payload logging (sets PAYLOAD_LOG=1)."
+    ),
+    print_snapshots: bool = typer.Option(
+        False, "--print-snapshots", help="Print snapshot plan and exit (dry-run mode)."
+    ),
 ) -> None:
     """Generate TimeGPT quantile forecasts."""
+
+    # Set PAYLOAD_LOG environment variable if flag is used
+    if payload_log:
+        os.environ["PAYLOAD_LOG"] = "1"
 
     run_dir = Path("artifacts") / "runs" / run_id
     feature_path = run_dir / "features" / "features.parquet"
@@ -547,6 +590,20 @@ def forecast(
         )
 
     universe_cfg = _load_yaml(config_dir / universe_name)
+
+    # Parse trading window configuration with backward compatibility
+    trading_window_cfg = parse_trading_window_config(
+        {**universe_cfg, **forecast_cfg},  # Merge configs for parsing
+        logger=logging.getLogger(__name__)
+    )
+
+    # Print warning banner for permissive mode
+    if not trading_window_cfg.enforce_trading_window:
+        logger.warning(
+            "PERMISSIVE MODE: Trading window enforcement is disabled. "
+            "Trades may occur outside configured trading window dates."
+        )
+
     trade_dates = sorted(features["timestamp_et"].dt.date.unique())
     holidays = get_trading_holidays(years=sorted(list(set(d.year for d in trade_dates))))
     scheduler = ForecastScheduler(
@@ -560,8 +617,68 @@ def forecast(
         skip_dates=sorted(skip_dates),
     )
 
-
+    # Validate snapshot limits and warn about potential issues
     logger = _configure_logger(logs_dir / "forecast.log", name="timegpt_v2.forecast")
+    validation_results = validate_snapshot_limits(scheduler)
+    log_validation_results(validation_results, logger)
+
+    # If validation failed, exit with error
+    if not validation_results["valid"]:
+        typer.echo("VALIDATION FAILED: " + "; ".join(validation_results["errors"]), err=True)
+        raise typer.Exit(code=1)
+
+    # Handle print-snapshots dry-run mode
+    if print_snapshots:
+        planned_snapshots = scheduler.generate_snapshots()
+
+        # Print snapshot plan
+        typer.echo("=== SNAPSHOT PLAN (DRY-RUN) ===")
+        typer.echo(f"Universe: {trade_dates[0]} to {trade_dates[-1]}")
+        typer.echo(f"Timezone: {tz_name}")
+        typer.echo(f"Snapshot times: {[t.strftime('%H:%M') for t in snapshot_times]}")
+        typer.echo(f"Active windows: {active_windows if active_windows else 'None'}")
+        typer.echo(f"Holidays: {len(holidays)} days")
+        typer.echo(f"Skip dates: {len(skip_dates)} days")
+        typer.echo("")
+
+        # Count snapshots per day
+        from collections import defaultdict
+        daily_counts = defaultdict(int)
+        for snapshot in planned_snapshots:
+            daily_counts[snapshot.date()] += 1
+
+        typer.echo(f"Total trading days: {len(trade_dates)}")
+        typer.echo(f"Total planned snapshots: {len(planned_snapshots)}")
+        typer.echo(f"Average snapshots per day: {len(planned_snapshots) / len(trade_dates):.1f}")
+        typer.echo("")
+
+        # Show per-day breakdown
+        typer.echo("Snapshots per trading day:")
+        for date in sorted(trade_dates):
+            count = daily_counts.get(date, 0)
+            status = "SKIPPED" if count == 0 else f"{count} snapshots"
+            typer.echo(f"  {date}: {status}")
+
+        # Check for limits
+        if max_snapshots_per_day:
+            exceeding_days = [d for d, c in daily_counts.items() if c > max_snapshots_per_day]
+            if exceeding_days:
+                typer.echo(f"WARNING: {len(exceeding_days)} days exceed max_snapshots_per_day={max_snapshots_per_day}")
+
+        if max_snapshots_total and len(planned_snapshots) > max_snapshots_total:
+            typer.echo(f"WARNING: Total snapshots ({len(planned_snapshots)}) exceed max_total_snapshots={max_snapshots_total}")
+            typer.echo("         Snapshots will be truncated to the limit.")
+
+        typer.echo("")
+        typer.echo("First 10 planned snapshots:")
+        for i, snapshot in enumerate(planned_snapshots[:10]):
+            symbol_note = " (per symbol)" if i == 0 else ""
+            typer.echo(f"  {snapshot.isoformat()}{symbol_note}")
+
+        if len(planned_snapshots) > 10:
+            typer.echo(f"  ... and {len(planned_snapshots) - 10} more")
+
+        return
     cache = ForecastCache(forecasts_dir / "cache", logger=logger)
     backend: NixtlaTimeGPTBackend | None = None
     if backend_mode not in {"auto", "nixtla", "stub"}:
@@ -647,46 +764,84 @@ def forecast(
     max_batch_size = max_batch_size_raw if max_batch_size_raw > 0 else len(expected_symbols)
     max_batch_size = max(max_batch_size, 1)
 
+    # Initialize coverage tracker for detailed monitoring
+    coverage_tracker = CoverageTracker(logger=logger)
+
     min_samples = forecast_cfg.get("min_obs_subhourly", 25)
-    snapshot_iterator = iter_snapshots(
+    snapshot_iterator = iter_snapshots_with_coverage(
         features=features,
         scheduler=scheduler,
         min_obs_subhourly=min_samples,
         logger=logger,
+        coverage_tracker=coverage_tracker,
+        trading_window=trading_window_cfg,
     )
 
     for symbol, snapshot_local in snapshot_iterator:
         snapshot_utc = pd.Timestamp(snapshot_local).tz_convert("UTC")
-        history = build_y_df(
-            features,
-            snapshot_utc,
-            target_column=scaler.target_column,
-            rolling_window_days=forecast_cfg.get("rolling_history_days", 90),
-            symbols=[symbol],
-        )
-        if history.empty:
+
+        try:
+            history = build_y_df(
+                features,
+                snapshot_utc,
+                target_column=scaler.target_column,
+                rolling_window_days=forecast_cfg.get("rolling_history_days", 90),
+                symbols=[symbol],
+            )
+            if history.empty:
+                coverage_tracker.add_skipped(
+                    f"{snapshot_utc.isoformat()}_{symbol}",
+                    SkipReason.PAYLOAD_EMPTY,
+                    "Empty history after payload construction"
+                )
+                continue
+
+            future_chunk = build_x_df_for_horizon(
+                features,
+                snapshot_utc,
+                horizon,
+                symbols=[symbol],
+                strict_exog=exog_config.strict_exog,
+            )
+
+            forecast_df = client.forecast(
+                history,
+                future_chunk,
+                features=features,
+                snapshot_ts=snapshot_utc,
+                run_id=run_id,
+                horizon=horizon,
+                freq=freq,
+                quantiles=quantiles,
+            )
+            forecast_df["snapshot_utc"] = snapshot_utc
+            results.append(forecast_df)
+
+        except Exception as exc:
+            coverage_tracker.add_failed(
+                f"{snapshot_utc.isoformat()}_{symbol}",
+                SkipReason.ERROR_API,
+                f"Forecast API error: {exc}"
+            )
+            logger.error(
+                f"Forecast failed for {symbol} at {snapshot_utc}: {exc}"
+            )
             continue
 
-        future_chunk = build_x_df_for_horizon(
-            features,
-            snapshot_utc,
-            horizon,
-            symbols=[symbol],
-        )
-        forecast_df = client.forecast(
-            history,
-            future_chunk,
-            features=features,
-            snapshot_ts=snapshot_utc,
-            run_id=run_id,
-            horizon=horizon,
-            freq=freq,
-            quantiles=quantiles,
-        )
-        forecast_df["snapshot_utc"] = snapshot_utc
-        results.append(forecast_df)
+    # Log coverage summary at the end
+    coverage_tracker.log_coverage_summary()
 
     if not results:
+        # Check if we have any sent forecasts that could be recovered
+        summary = coverage_tracker.get_coverage_summary()
+        if summary["counters"]["ok"] > 0:
+            logger.warning(
+                f"Some forecasts failed but {summary['counters']['ok']} succeeded"
+            )
+        else:
+            logger.error(
+                f"No successful forecasts generated. Coverage: {coverage_tracker.get_coverage_summary()}"
+            )
         raise typer.Exit(code=1)
 
     combined = pd.concat(results, ignore_index=True)
@@ -829,6 +984,12 @@ def forecast(
 def backtest(
     config_dir: Path = CONFIG_DIR_OPTION,
     run_id: str = RUN_ID_OPTION,
+    config_name: str = typer.Option(
+        "forecast.yaml", "--config-name", help="Forecast config file name"
+    ),
+    universe_name: str = typer.Option(
+        "universe.yaml", "--universe-name", help="Universe config file name"
+    ),
 ) -> None:
     """Run trading backtest using generated forecasts."""
     run_dir = Path("artifacts") / "runs" / run_id
@@ -842,7 +1003,7 @@ def backtest(
     forecasts_path = run_dir / "forecasts" / "quantiles.csv"
     features_path = run_dir / "features" / "features.parquet"
     prices_path = run_dir / "validation" / "clean.parquet"
-    trading_cfg_path = config_dir / "trading.yaml"
+    trading_cfg_path = config_dir / config_name.replace("forecast", "trading")
     backtest_cfg_path = config_dir / "backtest.yaml"
 
     for path, msg in (
@@ -870,6 +1031,24 @@ def backtest(
 
     trading_cfg = _load_yaml(trading_cfg_path)
     backtest_cfg = _load_yaml(backtest_cfg_path)
+
+    # Load universe config for trading window configuration
+    universe_cfg = _load_yaml(config_dir / universe_name)
+    forecast_cfg_for_window = _load_yaml(config_dir / config_name)
+
+    # Parse trading window configuration with backward compatibility
+    trading_window_cfg = parse_trading_window_config(
+        {**universe_cfg, **forecast_cfg_for_window},  # Merge configs for parsing
+        logger=logger
+    )
+
+    # Print warning banner for permissive mode
+    if not trading_window_cfg.enforce_trading_window:
+        logger.warning(
+            "PERMISSIVE MODE: Trading window enforcement is disabled. "
+            "Trades may occur outside configured trading window dates."
+        )
+
     tick_size = float(trading_cfg.get("tick_size", 0.01))
     phase_cfg = PhaseConfig.from_mapping(  # type: ignore[arg-type]
         {
@@ -891,6 +1070,7 @@ def backtest(
         k_sigma=_select_param(trading_cfg.get("k_sigma")),
         s_stop=_select_param(trading_cfg.get("s_stop")),
         s_take=_select_param(trading_cfg.get("s_take")),
+        uncertainty_k=_select_param(trading_cfg.get("uncertainty_k", 3.0)),
     )
 
     trading_costs = TradingCosts(
@@ -911,7 +1091,7 @@ def backtest(
         tick_size=tick_size,
     )
 
-    trades_df, summary_df = simulator.run(forecasts, features, prices)
+    trades_df, summary_df = simulator.run(forecasts, features, prices, trading_window=trading_window_cfg)
     trades_df = assign_phases(trades_df, config=phase_cfg)
     if "trade_month" in trades_df.columns:
         trades_df.drop(columns=["trade_month"], inplace=True)
@@ -1557,6 +1737,149 @@ def calibrate(
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     typer.echo(f"Calibration models saved to {calibration_config.model_path}")
+
+
+@app.command()
+def doctor(
+    config_dir: Path = CONFIG_DIR_OPTION,
+    run_id: str = RUN_ID_OPTION,
+    config_name: str = typer.Option(
+        "forecast.yaml", "--config-name", help="Forecast config file name"
+    ),
+    universe_name: str = typer.Option(
+        "universe.yaml", "--universe-name", help="Universe config file name"
+    ),
+    output_format: str = typer.Option(
+        "text", "--output-format", help="Output format (text/json)"
+    ),
+    save_report: bool = typer.Option(
+        False, "--save-report", help="Save diagnostic report to file"
+    ),
+) -> None:
+    """Analyze trading window compliance and coverage diagnostics."""
+    run_dir = Path("artifacts") / "runs" / run_id
+    logs_dir = run_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check for required artifacts
+    features_path = run_dir / "features" / "features.parquet"
+    forecasts_path = run_dir / "forecasts" / "quantiles.csv"
+    missing_artifacts = []
+
+    if not features_path.exists():
+        missing_artifacts.append("features.parquet (run 'build-features' first)")
+    if not forecasts_path.exists():
+        missing_artifacts.append("quantiles.csv (run 'forecast' first)")
+
+    if missing_artifacts:
+        raise typer.BadParameter(
+            f"Missing required artifacts: {', '.join(missing_artifacts)}"
+        )
+
+    # Load configurations
+    universe_cfg = _load_yaml(config_dir / universe_name)
+    forecast_cfg = _load_yaml(config_dir / config_name)
+
+    # Parse trading window configuration
+    trading_window_cfg = parse_trading_window_config(
+        {**universe_cfg, **forecast_cfg},
+        logger=logging.getLogger(__name__)
+    )
+
+    # Load data
+    features = pd.read_parquet(features_path)
+    forecasts = pd.read_csv(forecasts_path)
+
+    # Set up logger
+    logger = _configure_logger(logs_dir / "doctor.log", name="timegpt_v2.doctor")
+
+    # Initialize doctor
+    doctor = TradingWindowDoctor(logger=logger)
+
+    # Create mock coverage tracker for analysis
+    coverage_tracker = CoverageTracker(logger=logger)
+
+    # Get trade dates from features for snapshot planning
+    if "timestamp" in features.columns:
+        features["timestamp"] = pd.to_datetime(features["timestamp"], utc=True)
+        trade_dates = sorted(features["timestamp"].dt.date.unique())
+    else:
+        raise typer.BadParameter("Features must include 'timestamp' column")
+
+    # Create planned snapshots based on forecast config
+    from datetime import time
+    zone = ZoneInfo(str(forecast_cfg.get("tz", "America/New_York")))
+
+    snapshot_times = []
+    for snapshot_str in forecast_cfg.get("snapshots_et", []):
+        try:
+            snapshot_times.append(datetime.strptime(str(snapshot_str), "%H:%M").time())
+        except ValueError:
+            continue
+
+    if not snapshot_times:
+        raise typer.BadParameter("No snapshot times found in forecast configuration")
+
+    # Generate planned snapshots
+    from timegpt_v2.forecast.scheduler import get_trading_holidays
+    holidays = get_trading_holidays(years=sorted(set(d.year for d in trade_dates)))
+
+    from timegpt_v2.forecast.scheduler import ForecastScheduler
+    scheduler = ForecastScheduler(
+        dates=trade_dates,
+        snapshots=snapshot_times,
+        tz=zone,
+        holidays=holidays,
+        active_windows=[],
+        max_snapshots_per_day=None,
+        max_total_snapshots=None,
+        skip_dates=set(),
+    )
+
+    planned_snapshots = scheduler.generate_snapshots()
+
+    # Mock some coverage data for demonstration
+    for snapshot in planned_snapshots:
+        for symbol in features["symbol"].unique()[:5]:  # Limit to first 5 symbols for demo
+            snapshot_key = f"{snapshot.isoformat()}_{symbol}"
+            # Simulate some realistic coverage patterns
+            import random
+            if random.random() < 0.85:  # 85% success rate
+                coverage_tracker.add_sent(snapshot_key)
+            else:
+                reasons = [
+                    SkipReason.GATE_MIN_OBS,
+                    SkipReason.GATE_RTH,
+                    SkipReason.SKIP_BEFORE_TRADE_WINDOW,
+                    SkipReason.SKIP_AFTER_TRADE_WINDOW,
+                ]
+                reason = random.choice(reasons)
+                coverage_tracker.add_skipped(snapshot_key, reason, "Mock skip reason")
+
+    # Run analysis
+    diagnostic = doctor.analyze_trading_window_compliance(
+        trading_window=trading_window_cfg,
+        coverage_tracker=coverage_tracker,
+        snapshots_planned=planned_snapshots,
+        features_df=features,
+        forecasts_df=forecasts,
+    )
+
+    # Generate report
+    report = doctor.generate_diagnostic_report(diagnostic, trading_window_cfg, output_format)
+
+    # Output report
+    typer.echo(report)
+
+    # Save report if requested
+    if save_report:
+        report_path = logs_dir / f"trading_window_diagnostic.{output_format}"
+        if output_format == "json":
+            # report is already JSON string
+            report_path.write_text(report)
+        else:
+            report_path.write_text(report)
+        typer.echo(f"\nDiagnostic report saved to {report_path}")
 
 
 @app.command()

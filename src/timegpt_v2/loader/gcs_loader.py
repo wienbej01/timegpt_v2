@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 from pathlib import Path
 
 import pandas as pd
+
+from timegpt_v2.config.model import TradingWindowConfig
+from timegpt_v2.utils.trading_window import compute_load_ranges
 
 
 def enumerate_month_uris(
@@ -33,13 +36,34 @@ def load_history(
     rolling_history_days: int,
     gcs_config: Dict,
     logger: logging.Logger,
+    trading_window: Optional[TradingWindowConfig] = None,
 ) -> pd.DataFrame:
-    """Load multi-month history for a single symbol."""
-    hist_start = start - timedelta(days=rolling_history_days)
+    """
+    Load multi-month history for a single symbol.
+
+    Args:
+        symbol: Symbol to load
+        start: Historical start date (legacy interface for backward compatibility)
+        end: Historical end date (legacy interface for backward compatibility)
+        rolling_history_days: Days of history to load (legacy interface)
+        gcs_config: GCS configuration
+        logger: Logger instance
+        trading_window: Optional trading window configuration for new behavior
+    """
+    # Use new trading window logic if available, otherwise fall back to legacy behavior
+    if trading_window is not None:
+        load_start, load_end, _, _ = compute_load_ranges(trading_window)
+        hist_start = load_start
+        hist_end = load_end
+    else:
+        # Legacy behavior: always extend back by rolling_history_days
+        hist_start = start - timedelta(days=rolling_history_days)
+        hist_end = end
+
     bucket = gcs_config.get("bucket", "")
     template = gcs_config.get("template", "")
 
-    raw_uris = enumerate_month_uris(template, hist_start, end, symbol)
+    raw_uris = enumerate_month_uris(template, hist_start, hist_end, symbol)
     all_dfs: List[pd.DataFrame] = []
 
     is_local = Path(bucket).exists()
@@ -73,7 +97,7 @@ def load_history(
 
     combined["timestamp"] = pd.to_datetime(combined["timestamp"], utc=True)
     combined = combined[
-        (combined["timestamp"].dt.date >= hist_start) & (combined["timestamp"].dt.date <= end)
+        (combined["timestamp"].dt.date >= hist_start) & (combined["timestamp"].dt.date <= hist_end)
     ]
 
     return combined

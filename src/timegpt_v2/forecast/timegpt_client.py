@@ -223,6 +223,19 @@ class TimeGPTClient:
         horizon_minutes = int(horizon or self._config.horizon)
         freq_value = freq or self._config.freq
 
+        # Enforce minute frequency for intraday forecasting
+        if freq_value != "min":
+            self._logger.warning("Frequency override: forcing freq='min' for intraday forecasts (was %s)", freq_value)
+            freq_value = "min"
+
+        # Validate and log horizon as minutes
+        self._validate_and_log_horizon(horizon_minutes)
+
+        # Log frequency enforcement once per run
+        if not hasattr(self, '_logged_freq_enforcement'):
+            self._logger.info("Inferred/forced freq: %s for horizon %d minutes", freq_value, horizon_minutes)
+            self._logged_freq_enforcement = True
+
         if y_df.empty:
             return self._empty_frame(quantiles_tuple)
 
@@ -523,6 +536,45 @@ class TimeGPTClient:
     @staticmethod
     def _quantile_columns(quantiles: Iterable[float]) -> list[str]:
         return [f"q{int(round(q * 100))}" for q in quantiles]
+
+    def _validate_and_log_horizon(self, horizon_minutes: int) -> None:
+        """Validate horizon as minutes and log model selection policy.
+
+        Args:
+            horizon_minutes: Horizon value in minutes
+        """
+        # Validate horizon is reasonable for intraday forecasting
+        if horizon_minutes <= 0:
+            raise ValueError(f"Horizon must be positive, got {horizon_minutes}")
+        if horizon_minutes > 1440:  # More than 1 day
+            raise ValueError(f"Horizon {horizon_minutes} minutes exceeds daily limit for intraday forecasting")
+
+        # Apply model selection policy for intraday minute bars
+        if horizon_minutes in {30, 60}:
+            chosen_model = self._config.model
+            if chosen_model != "timegpt-1":
+                self._logger.warning(
+                    "Model selection policy: for intraday h=%d, prefer 'timegpt-1' (using '%s')",
+                    horizon_minutes, chosen_model
+                )
+            else:
+                self._logger.info(
+                    "Model selection policy: using 'timegpt-1' for intraday h=%d (optimal for 30-60min horizons)",
+                    horizon_minutes
+                )
+        else:
+            self._logger.info(
+                "Model selection: using '%s' for intraday h=%d (outside 30-60min optimal range)",
+                self._config.model, horizon_minutes
+            )
+
+        # Log once per run
+        if not hasattr(self, '_logged_horizon_policy'):
+            self._logger.info(
+                "Horizon validation: h=%d interpreted as minutes (not hours/days) with freq='min'",
+                horizon_minutes
+            )
+            self._logged_horizon_policy = True
 
     def _empty_frame(self, quantiles: tuple[float, ...]) -> pd.DataFrame:
         columns = ["unique_id", "forecast_ts", "snapshot_utc", *self._quantile_columns(quantiles)]

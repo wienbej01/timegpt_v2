@@ -33,7 +33,7 @@ class TargetScalingConfig:
 
         vol_raw = payload.get("volatility_column", cls.volatility_column)
         volatility_column = str(vol_raw)
-        allowed_modes = {"log_return", "basis_point", "volatility_z", "log_return_15m"}
+        allowed_modes = {"log_return", "basis_point", "volatility_z", "log_return_15m", "log_return_30m", "log_return_60m"}
         if mode not in allowed_modes:
             allowed_str = ", ".join(sorted(allowed_modes))
             raise ValueError(f"target.mode must be one of: {allowed_str}")
@@ -58,6 +58,8 @@ class TargetScaler:
         mapping = {
             "log_return": "target_log_return_1m",
             "log_return_15m": "target_log_return_15m",
+            "log_return_30m": "target_log_return_30m",
+            "log_return_60m": "target_log_return_60m",
             "basis_point": "target_bp_ret_1m",
             "volatility_z": "target_z_ret_1m",
         }
@@ -75,7 +77,7 @@ class TargetScaler:
         quantile_columns: Sequence[str],
     ) -> pd.DataFrame:
         """Convert quantile forecasts back to log-return space."""
-        if self._config.mode in {"log_return", "log_return_15m"}:
+        if self._config.mode in {"log_return", "log_return_15m", "log_return_30m", "log_return_60m"}:
             return forecasts
 
         updated = forecasts.copy()
@@ -128,6 +130,8 @@ class TargetScaler:
         mapping = {
             "log_return": "label_timestamp",
             "log_return_15m": "label_timestamp_15m",
+            "log_return_30m": "label_timestamp_30m",
+            "log_return_60m": "label_timestamp_60m",
             "basis_point": "label_timestamp",
             "volatility_z": "label_timestamp",
         }

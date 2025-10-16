@@ -589,16 +589,25 @@ def generate_coverage_report(forecasts: pd.DataFrame, actuals: pd.DataFrame) -> 
     symbol_col = "symbol" if "symbol" in forecasts.columns else "unique_id"
     ts_col = "ts_utc" if "ts_utc" in forecasts.columns else "forecast_ts"
 
+    # Merge with controlled suffixes to avoid _x/_y ambiguity
     merged = forecasts.merge(
-        actuals, left_on=[symbol_col, ts_col], right_on=[symbol_col, ts_col], how="inner"
+        actuals, left_on=[symbol_col, ts_col], right_on=[symbol_col, ts_col], how="inner",
+        suffixes=("", "_actual")
     )
+
+    # Coalesce y_true columns (prefer forecasts y_true, fall back to actuals y_true)
+    if "y_true_actual" in merged.columns:
+        merged["y_true"] = merged["y_true"].where(~merged["y_true"].isna(), merged["y_true_actual"])
+        merged.drop(columns=["y_true_actual"], inplace=True)
+    elif "y_true" not in merged.columns:
+        merged["y_true"] = merged["y_true_actual"]
 
     if merged.empty:
         return pd.DataFrame()
 
-    # Group by symbol and snapshot
+    # Group by symbol and snapshot (use ts_utc as snapshot)
     report_rows = []
-    for (symbol, snapshot), group in merged.groupby([symbol_col, "snapshot_utc"]):
+    for (symbol, snapshot), group in merged.groupby([symbol_col, ts_col]):
         if len(group) == 0:
             continue
 

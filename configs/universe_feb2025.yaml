@@ -1,0 +1,11 @@
+tickers: [AAPL]
+# Using new trading window format for enforcement
+trading_window:
+  start: "2025-02-01"
+  end: "2025-02-15"
+  history_backfill_days: 90  # Load 90 days of history before trading window
+  enforce_trading_window: true
+# Keep legacy dates for backward compatibility during transition
+dates: { start: "2025-02-01", end: "2025-02-15" }
+tz: America/New_York
+rth: { open: "09:30", close: "16:00" }

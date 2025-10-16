@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from timegpt_v2.loader.gcs_loader import load_history
+from timegpt_v2.config.model import TradingWindowConfig
 
 try:  # pragma: no cover - optional import for runtime
     import gcsfs  # type: ignore
@@ -54,13 +55,21 @@ class GCSReader:
         self._base_path = self._derive_base_path(config.bucket)
 
     def read_universe(
-        self, tickers: Iterable[str], start: date, end: date, rolling_history_days: int
+        self,
+        tickers: Iterable[str],
+        start: date,
+        end: date,
+        rolling_history_days: int,
+        trading_window: TradingWindowConfig | None = None,
     ) -> pd.DataFrame:
         """Read multiple tickers across date range into a single DataFrame."""
         logger = logging.getLogger(__name__)
         print("\n=== FORENSIC AUDIT: GCS READER - read_universe ===")
         print(f"Reading tickers: {list(tickers)}")
         print(f"Date range: {start} to {end}")
+        if trading_window:
+            print(f"Trading window: {trading_window.start} to {trading_window.end}")
+            print(f"History backfill days: {trading_window.history_backfill_days}")
 
         frames = []
         gcs_config = {"bucket": self._config.bucket, "template": self._config.template}
@@ -72,6 +81,7 @@ class GCSReader:
                 rolling_history_days=rolling_history_days,
                 gcs_config=gcs_config,
                 logger=logger,
+                trading_window=trading_window,
             )
             if not frame.empty:
                 frame = self._normalise_dataframe(frame, ticker)

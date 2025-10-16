@@ -1,0 +1,46 @@
+# Extended Duration Trading Configuration (5-60 minute holding periods)
+# Optimized for 30-minute forecast horizon to capture maximum edge
+
+# Entry signal thresholds (optimized for higher quality forecasts)
+k_sigma: [0.5, 0.75, 1.0]  # Entry signal strength (tighter due to better forecasts)
+
+# Exit thresholds (optimized for 30-minute forecast quality)
+s_stop: [2.5, 3.0, 3.5]  # Stop loss: 2.5-3.5x volatility (reduced due to better signals)
+s_take: [2.0, 2.5, 3.0]  # Take profit: 2-3x volatility (earlier exits due to better accuracy)
+
+# Uncertainty gate (tighter due to better forecast quality)
+uncertainty_k: [4.0, 4.5]  # Less uncertainty allowed (improved forecast reliability)
+
+# Time management
+time_stop_et: "16:00"  # Allow trading until market close
+
+# Position limits (optimized for higher quality trades)
+max_open_per_symbol: 1
+daily_trade_cap: 3  # More trades possible due to better forecasts
+
+# Costs
+fees_bps: 0.0
+half_spread_ticks:
+  AAPL: 1
+  MSFT: 1
+  NVDA: 1
+  TSLA: 1
+  AMZN: 1
+  GOOGL: 1
+  META: 1
+  NFLX: 1
+  AMD: 1
+  CRM: 1
+
+# Event avoidance
+no_trade:
+  earnings: true
+  fomc: true
+  cpi: true
+  buffer_min: 10
+
+# Extended duration parameters (optimized for 30-minute forecasts)
+min_holding_minutes: 5   # Reduced minimum hold (5-30min range now viable)
+max_holding_minutes: 60  # Reduced max hold (beyond 30min forecast quality degrades)
+volatility_window: 30  # Use 30-minute volatility (matches forecast horizon)
+exit_relaxation_factor: 1.5  # Reduced relaxation (forecasts are more reliable)

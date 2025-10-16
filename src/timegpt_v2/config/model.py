@@ -1,9 +1,25 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from datetime import date
+from typing import Dict, List, Optional
 
 from pydantic import Field
 from pydantic.dataclasses import dataclass
+
+
+@dataclass
+class TradingWindowConfig:
+    """Configuration for trading window enforcement and history backfill."""
+
+    # Trading window: the only period when snapshots/trades can occur
+    start: Optional[date] = None
+    end: Optional[date] = None
+
+    # History backfill: optional warmup loaded before trading_window.start for model context
+    history_backfill_days: int = 0
+
+    # Enforcement policy
+    enforce_trading_window: bool = True
 
 
 @dataclass

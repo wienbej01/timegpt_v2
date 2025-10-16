@@ -1,0 +1,109 @@
+# TSLA 30-Minute Optimized Trading Configuration
+# Online trading configuration for February 1-15, 2024
+
+# Entry signal thresholds (optimized for single stock trading)
+k_sigma: [0.5, 0.7, 0.9]  # Slightly wider for single stock volatility
+
+# Exit thresholds (TSLA-specific optimization)
+s_stop: [2.5, 3.0, 3.5]   # Stop loss: 2.5-3.5x 30m volatility
+s_take: [2.0, 2.5, 3.0]   # Take profit: 2-3x 30m volatility
+
+# Uncertainty gate (adjusted for single stock)
+uncertainty_k: [3.0, 3.5]  # Moderate uncertainty tolerance
+
+# Time management
+time_stop_et: "16:00"      # Standard market close
+
+# Position limits (single stock)
+max_open_per_symbol: 1
+daily_trade_cap: 2         # Conservative for single stock
+
+# Costs (TSLA-specific)
+fees_bps: 0.0
+half_spread_ticks:
+  TSLA: 2  # Higher spread for TSLA
+
+# Event avoidance
+no_trade:
+  earnings: true
+  fomc: true
+  cpi: true
+  buffer_min: 15  # Larger buffer for TSLA volatility
+
+# 30-minute horizon specific parameters
+min_holding_minutes: 5     # Allow quick exits
+max_holding_minutes: 45    # Maximum within forecast confidence
+volatility_window: 30      # Use 30-minute volatility
+exit_relaxation_factor: 1.3  # Less relaxation with better forecasts
+
+# TSLA-specific optimization
+tsla_optimization:
+  # TSLA is high volatility, adjust parameters accordingly
+  volatility_multiplier: 1.2  # Account for higher TSLA volatility
+
+  # Position sizing (single stock)
+  base_position_size: 1.0
+  max_position_size: 1.0
+
+# Extended duration logic (30m optimized)
+extended_duration:
+  enabled: true
+
+  # Dynamic exit scaling (time-aware thresholds)
+  exit_scaling:
+    # Stop loss tightens over time (protect profits)
+    stop_relaxation_per_min: -0.015  # Tighten by 1.5% per minute
+    stop_base_multiplier: 2.5       # Base 2.5x volatility
+
+    # Take profit tightens slightly (faster profit taking)
+    take_relaxation_per_min: -0.008  # Tighten by 0.8% per minute
+    take_base_multiplier: 2.0       # Base 2.0x volatility
+
+    # Minimum thresholds (never relax beyond these)
+    min_stop_multiplier: 2.0        # Never below 2.0x volatility
+    min_take_multiplier: 1.5        # Never below 1.5x volatility
+
+  # Holding period optimization
+  holding_periods:
+    # Optimal ranges based on 30m forecast confidence
+    sweet_spot_min: 8     # 8-minute minimum for TSLA
+    sweet_spot_max: 35    # 35-minute maximum within forecast confidence
+
+    # Forced exits
+    force_exit_min: 5     # Minimum 5-minute hold
+    force_exit_max: 45    # Maximum 45-minute hold
+
+  # Volatility scaling (30-minute optimized)
+  volatility_scaling:
+    window: 30                    # 30-minute volatility window
+    ewm_span: 30                  # EWM span for smoothing
+    min_periods: 10               # Minimum periods for calculation
+
+    # Scaling factors (TSLA-adjusted)
+    entry_volatility_cap: 3.5     # Cap at 3.5x 30m volatility (TSLA is more volatile)
+    exit_volatility_floor: 1.0    # Minimum 1.0x 30m volatility
+
+# Performance optimization settings
+performance:
+  # Signal quality filters
+  min_forecast_confidence: 0.55   # Slightly lower for single stock
+  max_uncertainty_ratio: 0.45     # Moderate uncertainty tolerance
+
+  # Position sizing (single stock)
+  base_position_size: 1.0         # Full position size
+  confidence_scaling: true        # Scale by forecast confidence
+
+  # Risk management (single stock)
+  max_portfolio_risk: 0.20        # 20% max portfolio risk (single stock)
+  max_correlation_exposure: 1.0   # Not applicable for single stock
+
+# TSLA-specific settings
+tsla_specific:
+  # Account for TSLA's higher volatility
+  higher_volatility_adjustment: true
+
+  # Adjust for TSLA's news sensitivity
+  news_sensitivity_adjustment: true
+
+  # Intraday pattern optimization
+  intraday_pattern_optimization: true

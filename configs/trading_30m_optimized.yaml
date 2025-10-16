@@ -1,0 +1,119 @@
+# 30-Minute Horizon Optimized Trading Configuration
+# Designed for maximum edge with TimeGPT's optimal 30-minute forecast range
+
+# Entry signal thresholds (optimized for high-quality 30m forecasts)
+k_sigma: [0.4, 0.6, 0.8]  # Tighter entry due to better forecast accuracy
+
+# Exit thresholds (optimized for 30-minute forecast reliability)
+s_stop: [2.0, 2.5, 3.0]   # Stop loss: 2-3x 30m volatility (tighter stops)
+s_take: [1.8, 2.2, 2.6]   # Take profit: 1.8-2.6x 30m volatility (earlier profits)
+
+# Uncertainty gate (stricter due to better forecast confidence)
+uncertainty_k: [3.5, 4.0]  # Less uncertainty tolerated with better forecasts
+
+# Time management
+time_stop_et: "16:00"      # Allow trading until market close
+
+# Position limits (optimized for higher quality signals)
+max_open_per_symbol: 1
+daily_trade_cap: 4         # More trades possible due to better signal quality
+
+# Costs
+fees_bps: 0.0
+half_spread_ticks:
+  AAPL: 1
+  MSFT: 1
+  NVDA: 1
+  TSLA: 1
+  AMZN: 1
+  GOOGL: 1
+  META: 1
+  NFLX: 1
+  AMD: 1
+  CRM: 1
+
+# Event avoidance
+no_trade:
+  earnings: true
+  fomc: true
+  cpi: true
+  buffer_min: 10
+
+# 30-minute horizon specific parameters
+min_holding_minutes: 5     # Allow quick exits if signals reverse
+max_holding_minutes: 45    # Maximum 45min (within 30m forecast confidence)
+volatility_window: 30      # Use 30-minute volatility (matches forecast horizon)
+exit_relaxation_factor: 1.3  # Less relaxation (forecasts are more reliable)
+
+# Extended duration logic (optimized for 30m forecasts)
+extended_duration:
+  enabled: true
+
+  # Dynamic exit scaling (time-aware thresholds)
+  exit_scaling:
+    # Stop loss tightens over time (protect profits)
+    stop_relaxation_per_min: -0.01  # Tighten by 1% per minute
+    stop_base_multiplier: 2.0       # Base 2x volatility
+
+    # Take profit tightens slightly (faster profit taking)
+    take_relaxation_per_min: -0.005  # Tighten by 0.5% per minute
+    take_base_multiplier: 1.8       # Base 1.8x volatility
+
+    # Minimum thresholds (never relax beyond these)
+    min_stop_multiplier: 1.5        # Never below 1.5x volatility
+    min_take_multiplier: 1.2        # Never below 1.2x volatility
+
+  # Holding period optimization
+  holding_periods:
+    # Optimal ranges based on 30m forecast confidence
+    sweet_spot_min: 10    # 10-minute minimum for edge realization
+    sweet_spot_max: 30    # 30-minute maximum within forecast confidence
+
+    # Forced exits
+    force_exit_min: 5     # Minimum 5-minute hold to avoid noise
+    force_exit_max: 45    # Maximum 45-minute hold (forecast degradation)
+
+  # Volatility scaling (30-minute optimized)
+  volatility_scaling:
+    window: 30                    # 30-minute volatility window
+    ewm_span: 30                  # EWM span for smoothing
+    min_periods: 10               # Minimum periods for calculation
+
+    # Scaling factors (adjusted for 30m horizon)
+    entry_volatility_cap: 3.0     # Cap at 3x 30m volatility
+    exit_volatility_floor: 0.8    # Minimum 0.8x 30m volatility
+
+# Performance optimization settings
+performance:
+  # Signal quality filters (stricter for 30m horizon)
+  min_forecast_confidence: 0.6    # Higher confidence threshold
+  max_uncertainty_ratio: 0.4      # Lower uncertainty tolerance
+
+  # Position sizing (optimized for better signals)
+  base_position_size: 1.0         # Full position size
+  confidence_scaling: true        # Scale by forecast confidence
+
+  # Risk management (tighter due to better signals)
+  max_portfolio_risk: 0.15        # 15% max portfolio risk
+  max_correlation_exposure: 0.4   # 40% max correlated exposure
+
+# 30-minute horizon specific features
+features_30m:
+  # Required features for 30m trading
+  required_features:
+    - target_log_return_30m
+    - label_timestamp_30m
+    - vol_ewm_30m
+    - sigma_30m
+    - range_pct_15m
+    - clv_15m
+    - vwap_dev
+    - rth_cumret_30m
+
+  # Optional features that improve 30m signals
+  optional_features:
+    - parkinson_sigma_15m
+    - vol_parkinson_30m
+    - vol_garman_klass_30m
+    - ret_skew_15m
+    - ret_kurt_15m

@@ -1,0 +1,45 @@
+{
+  "mcpServers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    },
+
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem@latest",
+        "--root",
+        "${PWD}",
+        "--writable"
+      ]
+    },
+
+    "git": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@cyanheads/git-mcp-server@latest",
+        "--repo",
+        "${PWD}"
+      ]
+    },
+
+    "shell": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@mkusaka/mcp-shell-server@latest",
+        "--allow",
+        "uv,python,pytest,ruff,mypy,make,bash,sh,grep,rg,awk,sed,ls,cat,head,tail,echo,df,du"
+      ],
+      "env": {
+        "MCP_SHELL_CWD": "${PWD}"
+      }
+    }
+  }
+}

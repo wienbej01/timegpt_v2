@@ -1,0 +1,65 @@
+{
+  "summary": {
+    "total_tests": 5,
+    "passed": 5,
+    "failed": 0,
+    "success_rate": 100.0
+  },
+  "results": [
+    [
+      "Date Boundary Tests",
+      "PASS",
+      {
+        "exact_start_boundary": true,
+        "exact_end_boundary": true,
+        "invalid_date_range": true,
+        "leap_year_handling": true,
+        "year_boundary_handling": true
+      }
+    ],
+    [
+      "Configuration Priority Tests",
+      "PASS",
+      {
+        "legacy_fallback": true,
+        "new_format_priority": true,
+        "default_values": true,
+        "mixed_config_handling": true,
+        "invalid_config_handling": false
+      }
+    ],
+    [
+      "Trading Window Enforcement",
+      "PASS",
+      {
+        "snapshot_filtering": true,
+        "trade_clamping": true,
+        "violation_detection": true,
+        "compliance_calculation": true,
+        "permissive_mode": true
+      }
+    ],
+    [
+      "Edge Case Handling",
+      "PASS",
+      {
+        "single_day_window": true,
+        "same_day_start_end": true,
+        "minimal_history": true,
+        "maximum_capacity": true,
+        "boundary_timestamps": true
+      }
+    ],
+    [
+      "Data Validation",
+      "PASS",
+      {
+        "date_validation": true,
+        "timestamp_validation": true,
+        "symbol_validation": true,
+        "price_validation": true,
+        "null_value_handling": true
+      }
+    ]
+  ]
+}

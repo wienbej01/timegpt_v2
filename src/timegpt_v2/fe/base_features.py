@@ -113,6 +113,8 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
 
     local["target_log_return_1m"] = log_close.shift(-1) - log_close
     local["target_log_return_15m"] = log_close.shift(-15) - log_close
+    local["target_log_return_30m"] = log_close.shift(-30) - log_close  # 30-minute target
+    local["target_log_return_60m"] = log_close.shift(-60) - log_close
     local["target_bp_ret_1m"] = local["target_log_return_1m"] * 10_000.0
 
     for window in policy.ret_windows:
@@ -123,11 +125,18 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
     local["vol_ewm_60m"] = vol_ewm
     vol_ewm_15 = minute_returns.pow(2).ewm(span=15, adjust=False, min_periods=1).mean().pow(0.5)
     local["vol_ewm_15m"] = vol_ewm_15
+
+    # Extended volatility measures for longer position durations
+    vol_ewm_30 = minute_returns.pow(2).ewm(span=30, adjust=False, min_periods=1).mean().pow(0.5)
+    local["vol_ewm_30m"] = vol_ewm_30
+    vol_ewm_90 = minute_returns.pow(2).ewm(span=90, adjust=False, min_periods=1).mean().pow(0.5)
+    local["vol_ewm_90m"] = vol_ewm_90
     scale = vol_ewm.replace(0.0, np.nan)
     scale_safe = scale.ffill().bfill().fillna(1.0)
     local["target_z_ret_1m"] = local["target_log_return_1m"] / (scale_safe + _LOG_EPS)
     for window in policy.realized_variance_windows:
         local[f"rv_{window}m"] = minute_returns.pow(2).rolling(window=window, min_periods=1).sum()
+        local[f"sigma_{window}m"] = local[f"rv_{window}m"].clip(lower=0).pow(0.5)
 
     local["ret_skew_15m"] = minute_returns.rolling(window=15, min_periods=5).skew().fillna(0.0)
     local["ret_kurt_15m"] = minute_returns.rolling(window=15, min_periods=5).kurt().fillna(3.0)
@@ -144,6 +153,8 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
     local["vol_parkinson_30m"] = (
         parkinson.rolling(window=policy.volatility_window, min_periods=5).mean().pow(0.5)
     )
+    # Parkinson volatility for 15m window
+    local["parkinson_sigma_15m"] = parkinson.rolling(window=15, min_periods=1).mean().pow(0.5)
 
     log_co = log_close - log_open
     gk = 0.5 * log_hl.pow(2) - (2.0 * math.log(2.0) - 1.0) * log_co.pow(2)
@@ -159,6 +170,11 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
     )
     rolling_std = local["close"].rolling(window=policy.vwap_window, min_periods=5).std()
     local["z_close_vwap_30m"] = (local["close"] - local["vwap_30m"]) / (rolling_std + _LOG_EPS)
+
+    # VWAP deviation
+    close_safe = local["close"].replace(0, np.nan)
+    vwap_safe = local["vwap_30m"].replace(0, np.nan)
+    local["vwap_dev"] = (close_safe / vwap_safe - 1.0).fillna(0.0)
 
     trend_window = max(policy.vwap_trend_window, 1)
     local[f"vwap_trend_{trend_window}m"] = local["vwap_30m"] - local["vwap_30m"].shift(trend_window)
@@ -181,8 +197,18 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
         (local["volume"] / (rolling_vol_max + _LOG_EPS)).clip(upper=1.0).fillna(0.0)
     )
 
-    close_safe = local["close"].replace(0, np.nan)
-    local["range_pct"] = ((local["high"] - local["low"]) / (close_safe + _LOG_EPS)).fillna(0.0)
+    close_safe_range = local["close"].replace(0, np.nan)
+    local["range_pct"] = ((local["high"] - local["low"]) / (close_safe_range + _LOG_EPS)).fillna(0.0)
+
+    # 15-minute range percentage
+    high_15m = local["high"].rolling(window=15, min_periods=1).max()
+    low_15m = local["low"].rolling(window=15, min_periods=1).min()
+    local["range_pct_15m"] = ((high_15m - low_15m) / (close_safe_range + _LOG_EPS)).fillna(0.0)
+
+    # 15-minute Close Location Value (CLV)
+    range_15m = high_15m - low_15m
+    range_safe = range_15m.replace(0, np.nan)
+    local["clv_15m"] = ((close_safe_range - low_15m) / range_safe).fillna(0.5)
 
     price_diff = local["close"].diff().fillna(0.0)
     direction = price_diff.apply(np.sign)
@@ -191,18 +217,53 @@ def _compute_single_symbol_features(group: pd.DataFrame, policy: FeaturePolicy) 
         window=policy.signed_volume_window, min_periods=1
     ).sum()
 
+    # RTH cumulative return (last 30 minutes)
+    # Check if we have ET time information available
+    if "is_rth" in local.columns:
+        # Find RTH open price for each day and compute cumulative return
+        local_et = local.index.tz_convert("America/New_York")
+        local["date_et"] = local_et.date
+        local["time_et"] = local_et.time
+
+        # Mark RTH hours (9:30 AM - 4:00 PM ET)
+        rth_start = pd.Timestamp("09:30").time()
+        rth_end = pd.Timestamp("16:00").time()
+        local["is_rth_hour"] = ((local["time_et"] >= rth_start) & (local["time_et"] <= rth_end))
+
+        # For each day, get the first RTH price as baseline
+        local["rth_open_price"] = local.where(local["is_rth_hour"], np.nan)["close"].groupby(local["date_et"]).transform("first")
+
+        # Compute cumulative return since RTH open (last 30 minutes only)
+        minutes_since_rth_open = ((local_et - local_et.normalize()).total_seconds() / 60).astype(int)
+        is_last_30m = minutes_since_rth_open >= 270  # 4.5 hours = 270 minutes after 9:30 AM
+
+        local["rth_cumret_30m"] = np.where(
+            is_last_30m & local["is_rth_hour"],
+            (close_safe_range / local["rth_open_price"] - 1.0).fillna(0.0),
+            0.0
+        )
+    else:
+        # Fallback: simple 30-minute cumulative return
+        local["rth_cumret_30m"] = log_close.diff(30).fillna(0.0)
+
     local.reset_index(inplace=True)
     local["label_timestamp"] = local["timestamp"].shift(-1)
     local["label_timestamp_15m"] = local["timestamp"].shift(-15)
+    local["label_timestamp_30m"] = local["timestamp"].shift(-30)  # 30-minute label
+    local["label_timestamp_60m"] = local["timestamp"].shift(-60)
     feature_cols = [
         "timestamp",
         "symbol",
         "target_log_return_1m",
         "target_log_return_15m",
+        "target_log_return_30m",  # 30-minute target
+        "target_log_return_60m",
         "target_bp_ret_1m",
         "target_z_ret_1m",
         "label_timestamp",
         "label_timestamp_15m",
+        "label_timestamp_30m",  # 30-minute label
+        "label_timestamp_60m",
     ]
     feature_cols.extend(
         col

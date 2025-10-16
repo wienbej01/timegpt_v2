@@ -1,0 +1,14 @@
+# TSLA February 2024 Universe Configuration
+# Target period: February 1-15, 2024
+
+tickers: [TSLA]
+# Trading window configuration
+trading_window:
+  start: "2024-02-01"
+  end: "2024-02-15"
+  history_backfill_days: 60  # Load 60 days of history for 30m forecasts
+  enforce_trading_window: true
+# Keep legacy dates for backward compatibility
+dates: { start: "2024-02-01", end: "2024-02-15" }
+tz: America/New_York
+rth: { open: "09:30", close: "16:00" }
