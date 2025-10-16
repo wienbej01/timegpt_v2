@@ -27,6 +27,38 @@ make test-cov         # Run tests with coverage report
 ```
 
 ### Pipeline Commands
+
+#### CLI Parameter Overrides (NEW)
+The system now supports CLI parameter overrides for tickers and dates, eliminating the need for custom universe configuration files:
+
+```bash
+# Full pipeline with CLI parameter overrides
+RUN_ID=custom_test
+python -m timegpt_v2.cli check-data \
+  --config-dir configs --config-name forecast.yaml --universe-name universe.yaml \
+  --tickers "TSLA,AAPL,MSFT" --start-date "2025-02-01" --end-date "2025-03-31" --run-id "$RUN_ID"
+
+python -m timegpt_v2.cli build-features \
+  --config-dir configs --config-name forecast.yaml --universe-name universe.yaml \
+  --tickers "TSLA,AAPL,MSFT" --start-date "2025-02-01" --end-date "2025-03-31" --run-id "$RUN_ID"
+
+python -m timegpt_v2.cli forecast \
+  --config-dir configs --config-name forecast.yaml --run-id "$RUN_ID" --api-mode offline
+
+python -m timegpt_v2.cli backtest \
+  --config-dir configs --config-name forecast.yaml --universe-name universe.yaml \
+  --tickers "TSLA,AAPL,MSFT" --start-date "2025-02-01" --end-date "2025-03-31" --run-id "$RUN_ID"
+
+python -m timegpt_v2.cli evaluate --config-dir configs --run-id "$RUN_ID"
+python -m timegpt_v2.cli report --config-dir configs --run-id "$RUN_ID"
+```
+
+**New CLI Parameters:**
+- `--tickers`: Comma-separated list of ticker symbols (overrides universe config)
+- `--start-date`: Trading window start date in YYYY-MM-DD format (overrides universe config)
+- `--end-date`: Trading window end date in YYYY-MM-DD format (overrides universe config)
+
+#### Standard Pipeline Commands
 ```bash
 # Full demo pipeline (≈5 minutes)
 RUN_ID=dev
@@ -62,6 +94,13 @@ python -m timegpt_v2.cli check-data --config-name forecast_smoke.yaml --universe
 python -m timegpt_v2.cli build-features --config-name forecast_smoke.yaml --universe-name universe_smoke.yaml --run-id <run_id>
 python -m timegpt_v2.cli forecast --config-name forecast_smoke.yaml --universe-name universe_smoke.yaml --run-id <run_id>
 python -m timegpt_v2.cli backtest --config-name forecast_smoke.yaml --run-id <run_id>
+
+# Quick smoke test with CLI parameter overrides
+RUN_ID=smoke_cli
+python -m timegpt_v2.cli check-data --tickers "AAPL" --start-date "2024-07-01" --end-date "2024-07-15" --run-id "$RUN_ID"
+python -m timegpt_v2.cli build-features --tickers "AAPL" --start-date "2024-07-01" --end-date "2024-07-15" --run-id "$RUN_ID"
+python -m timegpt_v2.cli forecast --run-id "$RUN_ID" --api-mode offline
+python -m timegpt_v2.cli backtest --tickers "AAPL" --start-date "2024-07-01" --end-date "2024-07-15" --run-id "$RUN_ID"
 ```
 
 ### 30-Minute Optimization Commands
@@ -213,3 +252,5 @@ Tests use hypothesis for property-based testing and include uncertainty handling
 - **API key errors**: Set `TIMEGPT_API_KEY` or `NIXTLA_API_KEY` in environment
 - **Payload size limits**: Adjust `max_bytes_per_call` and `num_partitions` in forecast config
 - **Missing exogenous features**: Use `--no-strict-exog` or check feature generation
+- **CLI parameter overrides not working**: Ensure the full pipeline runs sequentially. Backtest requires forecasts to exist from previous steps
+- **No trades generated with CLI parameters**: Check that the trading strategy parameters in config files are appropriate for the selected symbols and time period

@@ -61,14 +61,21 @@ from timegpt_v2.eval.metrics_forecast import (
     rrmse,
 )
 from timegpt_v2.eval.metrics_trading import (
+    avg_win_loss_ratio,
+    calmar_ratio,
+    comprehensive_performance_metrics,
     hit_rate,
+    kelly_criterion,
+    max_consecutive_losses,
     max_drawdown,
     per_symbol_metrics,
     portfolio_hit_rate,
     portfolio_max_drawdown,
     portfolio_sharpe,
     portfolio_total_pnl,
+    profit_factor,
     sharpe_ratio,
+    sortino_ratio,
 )
 from timegpt_v2.fe.base_features import build_feature_matrix
 from timegpt_v2.fe.context import FeatureContext
@@ -182,6 +189,43 @@ def _iter_chunks(items: Sequence[str], size: int) -> Iterable[list[str]]:
         yield list(items[i : i + size])
 
 
+def _apply_universe_overrides(
+    universe_cfg: dict[str, Any],
+    tickers: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    """Apply CLI parameter overrides to universe configuration."""
+    # Override tickers if provided
+    if tickers:
+        universe_cfg["tickers"] = [t.strip() for t in tickers.split(",") if t.strip()]
+
+    # Override dates if provided
+    if start_date or end_date:
+        # Convert CLI dates to proper format
+        cli_start = datetime.fromisoformat(start_date).date() if start_date else None
+        cli_end = datetime.fromisoformat(end_date).date() if end_date else None
+
+        # Update trading window config
+        if "trading_window" not in universe_cfg:
+            universe_cfg["trading_window"] = {}
+
+        if cli_start:
+            universe_cfg["trading_window"]["start"] = cli_start
+        if cli_end:
+            universe_cfg["trading_window"]["end"] = cli_end
+
+        # Also update legacy dates for backward compatibility
+        if "dates" not in universe_cfg:
+            universe_cfg["dates"] = {}
+        if cli_start:
+            universe_cfg["dates"]["start"] = start_date
+        if cli_end:
+            universe_cfg["dates"]["end"] = end_date
+
+    return universe_cfg
+
+
 @app.command(name="check-data")
 def check_data(
     config_dir: Path = CONFIG_DIR_OPTION,
@@ -192,6 +236,15 @@ def check_data(
         "universe.yaml", "--universe-name", help="Universe config file name"
     ),
     run_id: str = RUN_ID_OPTION,
+    tickers: str = typer.Option(
+        None, "--tickers", help="Comma-separated list of ticker symbols. Overrides universe config."
+    ),
+    start_date: str = typer.Option(
+        None, "--start-date", help="Start date (YYYY-MM-DD). Overrides universe config."
+    ),
+    end_date: str = typer.Option(
+        None, "--end-date", help="End date (YYYY-MM-DD). Overrides universe config."
+    ),
 ) -> None:
     """Validate source data before downstream processing."""
     started = datetime.utcnow()
@@ -207,6 +260,9 @@ def check_data(
     policy_cfg = _load_yaml(config_dir / "dq_policy.yaml")
     forecast_cfg = _load_yaml(config_dir / config_name)
 
+    # Apply CLI parameter overrides to universe configuration
+    universe_cfg = _apply_universe_overrides(universe_cfg, tickers, start_date, end_date)
+
     # Parse trading window configuration with backward compatibility
     trading_window_cfg = parse_trading_window_config(
         {**universe_cfg, **forecast_cfg},  # Merge configs for parsing
@@ -220,8 +276,8 @@ def check_data(
 
     # Use trading window dates if available, otherwise fall back to legacy dates
     if trading_window_cfg.start and trading_window_cfg.end:
-        start_date = trading_window_cfg.start
-        end_date = trading_window_cfg.end
+        parsed_start_date = trading_window_cfg.start
+        parsed_end_date = trading_window_cfg.end
     else:
         date_cfg = _expect_mapping("universe.dates", universe_cfg.get("dates"))
         try:
@@ -229,8 +285,8 @@ def check_data(
             end_str = str(date_cfg["end"])
         except KeyError as exc:
             raise typer.BadParameter(f"Missing universe date config: {exc}") from exc
-        start_date = datetime.fromisoformat(start_str + "T00:00:00").date()
-        end_date = datetime.fromisoformat(end_str + "T00:00:00").date()
+        parsed_start_date = datetime.fromisoformat(start_str + "T00:00:00").date()
+        parsed_end_date = datetime.fromisoformat(end_str + "T00:00:00").date()
 
     gcs_cfg = _expect_mapping("data.gcs", data_cfg.get("gcs"))
     bucket = str(gcs_cfg.get("bucket", ""))
@@ -256,7 +312,7 @@ def check_data(
             "Trades may occur outside configured trading window dates."
         )
 
-    raw_frame = reader.read_universe(tickers, start_date, end_date, rolling_history_days, trading_window_cfg)
+    raw_frame = reader.read_universe(tickers, parsed_start_date, parsed_end_date, rolling_history_days, trading_window_cfg)
     checker = DataQualityChecker(policy=DataQualityPolicy.from_dict(policy_cfg))
     clean_frame, report = checker.validate(raw_frame)
 
@@ -303,6 +359,15 @@ def build_features(
     ),
     universe_name: str = typer.Option(
         "universe.yaml", "--universe-name", help="Universe config file name"
+    ),
+    tickers: str = typer.Option(
+        None, "--tickers", help="Comma-separated list of ticker symbols. Overrides universe config."
+    ),
+    start_date: str = typer.Option(
+        None, "--start-date", help="Start date (YYYY-MM-DD). Overrides universe config."
+    ),
+    end_date: str = typer.Option(
+        None, "--end-date", help="End date (YYYY-MM-DD). Overrides universe config."
     ),
 ) -> None:
     """Build feature matrix from validated data."""
@@ -355,6 +420,15 @@ def forecast(
         "universe.yaml", "--universe-name", help="Universe config file name"
     ),
     run_id: str = RUN_ID_OPTION,
+    tickers: str = typer.Option(
+        None, "--tickers", help="Comma-separated list of ticker symbols. Overrides universe config."
+    ),
+    start_date: str = typer.Option(
+        None, "--start-date", help="Start date (YYYY-MM-DD). Overrides universe config."
+    ),
+    end_date: str = typer.Option(
+        None, "--end-date", help="End date (YYYY-MM-DD). Overrides universe config."
+    ),
     api_mode: str = typer.Option(
         None, "--api-mode", help="API mode (online/offline). Overrides config."
     ),
@@ -591,6 +665,9 @@ def forecast(
 
     universe_cfg = _load_yaml(config_dir / universe_name)
 
+    # Apply CLI parameter overrides to universe configuration
+    universe_cfg = _apply_universe_overrides(universe_cfg, tickers, start_date, end_date)
+
     # Parse trading window configuration with backward compatibility
     trading_window_cfg = parse_trading_window_config(
         {**universe_cfg, **forecast_cfg},  # Merge configs for parsing
@@ -604,7 +681,21 @@ def forecast(
             "Trades may occur outside configured trading window dates."
         )
 
-    trade_dates = sorted(features["timestamp_et"].dt.date.unique())
+    # Use trading window dates if available, otherwise fall back to feature dates
+    if trading_window_cfg.start and trading_window_cfg.end:
+        # Generate trading dates from trading window configuration
+        from datetime import timedelta
+        current_date = trading_window_cfg.start
+        trade_dates = []
+        while current_date <= trading_window_cfg.end:
+            # Only include weekdays (Monday=0, Friday=4)
+            if current_date.weekday() < 5:
+                trade_dates.append(current_date)
+            current_date += timedelta(days=1)
+        trade_dates = sorted(trade_dates)
+    else:
+        # Fallback to feature dates if trading window not configured
+        trade_dates = sorted(features["timestamp_et"].dt.date.unique())
     holidays = get_trading_holidays(years=sorted(list(set(d.year for d in trade_dates))))
     scheduler = ForecastScheduler(
         dates=trade_dates,
@@ -844,7 +935,22 @@ def forecast(
             )
         raise typer.Exit(code=1)
 
-    combined = pd.concat(results, ignore_index=True)
+    # Ensure consistent schema before concatenation
+    if results:
+        # Get all columns from all results
+        all_columns = set()
+        for df in results:
+            all_columns.update(df.columns)
+
+        # Ensure each result has all columns, fill missing with NaN
+        for i, df in enumerate(results):
+            missing_cols = all_columns - set(df.columns)
+            for col in missing_cols:
+                results[i][col] = pd.NA
+
+        combined = pd.concat(results, ignore_index=True)
+    else:
+        combined = pd.DataFrame()
     quantile_cols = [col for col in combined.columns if col.startswith("q")]
     combined = scaler.inverse_quantiles(
         combined,
@@ -990,6 +1096,15 @@ def backtest(
     universe_name: str = typer.Option(
         "universe.yaml", "--universe-name", help="Universe config file name"
     ),
+    tickers: str = typer.Option(
+        None, "--tickers", help="Comma-separated list of ticker symbols. Overrides universe config."
+    ),
+    start_date: str = typer.Option(
+        None, "--start-date", help="Start date (YYYY-MM-DD). Overrides universe config."
+    ),
+    end_date: str = typer.Option(
+        None, "--end-date", help="End date (YYYY-MM-DD). Overrides universe config."
+    ),
 ) -> None:
     """Run trading backtest using generated forecasts."""
     run_dir = Path("artifacts") / "runs" / run_id
@@ -1005,6 +1120,29 @@ def backtest(
     prices_path = run_dir / "validation" / "clean.parquet"
     trading_cfg_path = config_dir / config_name.replace("forecast", "trading")
     backtest_cfg_path = config_dir / "backtest.yaml"
+
+    # Check for custom backtest config based on universe name
+    universe_cfg = _load_yaml(config_dir / universe_name)
+
+    # Apply CLI parameter overrides to universe configuration
+    universe_cfg = _apply_universe_overrides(universe_cfg, tickers, start_date, end_date)
+
+    if "backtest_config" in universe_cfg:
+        custom_backtest_path = config_dir / universe_cfg["backtest_config"]
+        if custom_backtest_path.exists():
+            backtest_cfg_path = custom_backtest_path
+            logger = _configure_logger(logs_dir / "backtest.log", name="timegpt_v2.backtest")
+            logger.info(f"Using custom backtest config: {custom_backtest_path}")
+        else:
+            logger.warning(f"Custom backtest config not found: {custom_backtest_path}, using default")
+    elif "UNIVERSE_BACKTEST_CONFIG" in os.environ:
+        env_config = os.environ["UNIVERSE_BACKTEST_CONFIG"]
+        env_path = Path(config_dir) / env_config
+        if env_path.exists():
+            backtest_cfg_path = env_path
+            logger.info(f"Using environment backtest config: {env_path}")
+        else:
+            logger.warning(f"Environment backtest config not found: {env_path}, using default")
 
     for path, msg in (
         (forecasts_path, "Forecasts not found. Run `forecast` first."),
@@ -1033,7 +1171,7 @@ def backtest(
     backtest_cfg = _load_yaml(backtest_cfg_path)
 
     # Load universe config for trading window configuration
-    universe_cfg = _load_yaml(config_dir / universe_name)
+    # Note: universe_cfg already loaded and overridden above
     forecast_cfg_for_window = _load_yaml(config_dir / config_name)
 
     # Parse trading window configuration with backward compatibility
@@ -1107,10 +1245,38 @@ def backtest(
     per_symbol_path = eval_dir / "per_symbol_summary.csv"
 
     trades_output = trades_df.copy()
+
+    # Validate timezone consistency and log critical trades
+    logger = _configure_logger(logs_dir / "backtest.log", name="timegpt_v2.backtest")
+
     for column in ("entry_ts", "exit_ts"):
-        trades_output[column] = pd.to_datetime(trades_output[column], utc=True).dt.strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        # Ensure timestamps are UTC and validate timezone consistency
+        trades_output[column] = pd.to_datetime(trades_output[column], utc=True)
+
+        # Check for any timezone inconsistencies
+        if trades_output[column].dt.tz is None:
+            logger.warning(
+                f"Trade timestamps in column '{column}' missing timezone info, assuming UTC"
+            )
+
+        # Log critical trades (around market open/close times)
+        critical_hours = [14, 15, 16]  # 2-4 PM UTC (around market close)
+        critical_trades = trades_output[
+            trades_output[column].dt.hour.isin(critical_hours)
+        ]
+
+        if not critical_trades.empty:
+            logger.info(
+                f"Found {len(critical_trades)} critical trades during hours {critical_hours} UTC"
+            )
+            for _, trade in critical_trades.head(3).iterrows():  # Log first 3 critical trades
+                logger.info(
+                    f"CRITICAL TRADE: {trade['symbol']} {column}={trade[column]} "
+                    f"entry=${trade.get('entry_price', 'N/A')} exit=${trade.get('exit_price', 'N/A')}"
+                )
+
+        # Format to ISO 8601 with Z suffix
+        trades_output[column] = trades_output[column].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     trades_output.to_csv(trades_path, index=False)
     summary_df.to_csv(summary_path, index=False)
@@ -1291,21 +1457,40 @@ def evaluate(
     coverage_tolerance = 0.02 if total_obs >= 50 else 0.1
     min_obs_for_gates = 200
 
-    # Trading evaluation
+    # Trading evaluation with comprehensive performance metrics
     net_pnl_series = trades.get("net_pnl")
     if net_pnl_series is None:
         raise typer.BadParameter("Trades file missing `net_pnl` column.")
     net_pnl_series = trades.sort_values("entry_ts").set_index("entry_ts")["net_pnl"].astype(float)
+
+    # Calculate comprehensive performance metrics
+    comprehensive_metrics = comprehensive_performance_metrics(trades)
     trading_metrics = {
         "sharpe_ratio": sharpe_ratio(net_pnl_series, trading_days=252),
+        "sortino_ratio": sortino_ratio(net_pnl_series, trading_days=252),
+        "calmar_ratio": calmar_ratio(net_pnl_series, trading_days=252),
         "max_drawdown": max_drawdown(net_pnl_series),
         "hit_rate": hit_rate(net_pnl_series),
         "total_pnl": net_pnl_series.sum(),
+        "profit_factor": profit_factor(trades),
+        "avg_win_loss_ratio": avg_win_loss_ratio(trades),
+        "max_consecutive_losses": max_consecutive_losses(trades),
+        "kelly_criterion": kelly_criterion(trades),
     }
+
+    # Add comprehensive metrics if available
+    if comprehensive_metrics:
+        trading_metrics.update(comprehensive_metrics)
+
     trading_metrics_df = pd.DataFrame([trading_metrics])
     trading_metrics_path = eval_dir / "bt_summary.csv"
     trading_metrics_df.to_csv(trading_metrics_path, index=False)
     typer.echo(f"Trading metrics written to {trading_metrics_path}")
+
+    # Additional detailed performance report
+    detailed_metrics_path = eval_dir / "comprehensive_performance_metrics.csv"
+    pd.DataFrame([comprehensive_metrics]).to_csv(detailed_metrics_path, index=False)
+    typer.echo(f"Comprehensive performance metrics written to {detailed_metrics_path}")
 
     # Portfolio metrics per phase
     portfolio_metrics_rows = []
